@@ -1,3 +1,5 @@
 discord.py
 locust
 flask
+discord.py
+aiohttp
