@@ -4,7 +4,25 @@ import socket
 import os
 import asyncio
 import threading
+from flask import Flask
+from threading import Thread
 
+# --- SEZIONE FLASK PER UPTIME ---
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is alive!"
+
+def run_flask():
+    # Render assegna una porta dinamica, dobbiamo leggerla dalle variabili d'ambiente
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Thread(target=run_flask)
+    t.start()
+    
 # Configuriamo il bot
 intents = discord.Intents.default()
 intents.message_content = True
