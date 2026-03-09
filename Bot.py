@@ -70,6 +70,31 @@ async def stress(ctx, ip: str, port: int, duration: int = 60, threads: int = 1):
     active_tests.pop(test_id, None)
     await ctx.send(f"✅ Test su {ip} completato con {threads} threads.")
 
+bot = commands.Bot(command_prefix='!', intents=discord.Intents.all())
+
+@bot.command()
+async def scan(ctx, ip: str):
+    await ctx.send(f"🔍 Inizio scansione su `{ip}`... Ti avviserò appena trovo una porta aperta.")
+    
+    # Definiamo un range di porte (es. da 1 a 1024)
+    found = False
+    for port in range(1, 1025):
+        # Creiamo un socket per il test
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.5) # Tempo massimo di attesa per ogni porta
+        
+        result = s.connect_ex((ip, port)) # Ritorna 0 se la porta è aperta
+        if result == 0:
+            await ctx.send(f"✅ **Porta aperta trovata!**\nIP: `{ip}`\nPorta: `{port}`")
+            found = True
+            s.close()
+            break # Si ferma alla prima porta trovata
+        s.close()
+
+    if not found:
+        await ctx.send(f"❌ Scansione completata su `{ip}`. Nessuna porta aperta trovata nel range 1-1024.")
+
+
 # --- AVVIO ---
 if __name__ == "__main__":
     keep_alive()
