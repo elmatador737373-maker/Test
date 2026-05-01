@@ -1,103 +1,144 @@
 import discord
-from discord.ext import commands
-import socket
 import os
+import yt_dlp
 import asyncio
-from flask import Flask
-from threading import Thread
+from discord import app_commands, ui
+from discord.ext import commands
+from dotenv import load_dotenv
 
-# --- CONFIGURAZIONE FLASK ---
-app = Flask('')
-@app.route('/')
-def home(): return "Bot is live!"
+# Caricamento Token
+load_dotenv()
+TOKEN = os.getenv('DISCORD_TOKEN')
 
-def run_flask():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
+# Opzioni per lo streaming audio (FFmpeg)
+FFMPEG_OPTIONS = {
+    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+    'options': '-vn',
+}
 
-def keep_alive():
-    t = Thread(target=run_flask)
-    t.daemon = True
-    t.start()
+# Configurazione del Bot
+class MusicBot(commands.Bot):
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.message_content = True
+        super().__init__(command_prefix="!", intents=intents)
 
-# --- LOGICA BOT ---
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
+    async def setup_hook(self):
+        # Registra i comandi slash
+        await self.tree.sync()
+        print(f"✅ Comandi sincronizzati per {self.user}")
 
-active_tests = {}
+bot = MusicBot()
 
-async def packet_sender(ip, port, end_time, test_id):
-    """Singolo 'operaio' che invia pacchetti."""
-    client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    bytes_packet = os.urandom(1024) # 1KB di dati
+# --- LOGICA DI RICERCA YOUTUBE ---
+async def get_yt_suggestions(query: str):
+    if not query or len(query) < 3:
+        return []
     
-    while asyncio.get_event_loop().time() < end_time:
-        if not active_tests.get(test_id, True):
-            break
-        try:
-            client.sendto(bytes_packet, (ip, port))
-            # Un micro-attesa per non far crashare il bot stesso
-            await asyncio.sleep(0.0001) 
-        except:
-            break
+    ydl_opts = {'format': 'bestaudio', 'quiet': True, 'no_warnings': True}
+    try:
+        loop = asyncio.get_event_loop()
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            # Ricerca veloce senza download
+            info = await loop.run_in_executor(
+                None, lambda: ydl.extract_info(f"ytsearch5:{query}", download=False)
+            )
+            return [
+                app_commands.Choice(name=f"🎵 {entry['title'][:90]}", value=entry['webpage_url']) 
+                for entry in info['entries']
+            ]
+    except Exception as e:
+        print(f"Errore ricerca: {e}")
+        return []
 
-@bot.command()
-async def stress(ctx, ip: str, port: int, duration: int = 60, threads: int = 1):
-    """Uso: !stress [IP] [PORTA] [DURATA] [THREADS]"""
+# --- INTERFACCIA JUKEBOX (BOTTONI) ---
+class JukeboxView(ui.View):
+    def __init__(self, vc):
+        super().__init__(timeout=None)
+        self.vc = vc
+
+    @ui.button(label="Pausa/Riprendi", style=discord.ButtonStyle.primary, emoji="⏯️")
+    async def pause_resume(self, interaction: discord.Interaction, button: ui.Button):
+        if self.vc.is_playing():
+            self.vc.pause()
+            await interaction.response.send_message("⏸️ In pausa", ephemeral=True)
+        elif self.vc.is_paused():
+            self.vc.resume()
+            await interaction.response.send_message("▶️ Ripreso", ephemeral=True)
+        else:
+            await interaction.response.send_message("Nulla in riproduzione", ephemeral=True)
+
+    @ui.button(label="Stop", style=discord.ButtonStyle.danger, emoji="⏹️")
+    async def stop(self, interaction: discord.Interaction, button: ui.Button):
+        if self.vc:
+            await self.vc.disconnect()
+            await interaction.response.edit_message(content="⏹️ Riproduzione terminata.", embed=None, view=None)
+        else:
+            await interaction.response.send_message("Non sono connesso", ephemeral=True)
+
+# --- COMANDI ---
+
+@bot.tree.command(name="play", description="Riproduci musica da YouTube con stile Jukebox")
+@app_commands.describe(canzone="Cerca il titolo o incolla l'URL")
+async def play(interaction: discord.Interaction, canzone: str):
+    await interaction.response.defer()
     
-    # Limiti di sicurezza per Render
-    if duration > 300: duration = 300
-    if threads > 10: # Massimo 10 worker per non farsi bannare da Render
-        await ctx.send("⚠️ Massimo 10 threads consentiti sul piano gratuito.")
-        threads = 10
+    # Controllo se l'utente è in un canale vocale
+    if not interaction.user.voice:
+        return await interaction.followup.send("❌ Devi essere in un canale vocale!")
 
-    test_id = f"{ip}:{port}"
-    active_tests[test_id] = True
-    
-    await ctx.send(f"🚀 **Stress Test Multi-Thread**\n📍 IP: `{ip}:{port}`\n👥 Threads: `{threads}`\n⏱️ Durata: `{duration}s`")
+    # Connessione
+    vc = interaction.guild.voice_client
+    if not vc:
+        vc = await interaction.user.voice.channel.connect(self_deaf=True)
 
-    end_time = asyncio.get_event_loop().time() + duration
-    
-    # Creiamo più task (operai) che lavorano contemporaneamente
-    tasks = []
-    for _ in range(threads):
-        tasks.append(asyncio.create_task(packet_sender(ip, port, end_time, test_id)))
+    # Estrazione audio
+    ydl_opts = {'format': 'bestaudio/best', 'quiet': True}
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(canzone, download=False)
+            if 'entries' in info: # Se è una playlist o ricerca generica prendi il primo
+                info = info['entries'][0]
+            
+            url = info['url']
+            title = info['title']
+            thumb = info.get('thumbnail')
+            duration = info.get('duration_string', 'Sconosciuta')
 
-    # Attendiamo che tutti i task finiscano
-    await asyncio.gather(*tasks)
-    
-    active_tests.pop(test_id, None)
-    await ctx.send(f"✅ Test su {ip} completato con {threads} threads.")
+        if vc.is_playing():
+            vc.stop()
 
-bot = commands.Bot(command_prefix='!', intents=discord.Intents.all())
+        # Riproduzione
+        source = discord.FFmpegPCMAudio(url, **FFMPEG_OPTIONS)
+        vc.play(source)
 
-@bot.command()
-async def scan(ctx, ip: str):
-    await ctx.send(f"🔍 Inizio scansione su `{ip}`... Ti avviserò appena trovo una porta aperta.")
-    
-    # Definiamo un range di porte (es. da 1 a 1024)
-    found = False
-    for port in range(1, 1025):
-        # Creiamo un socket per il test
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(0.5) # Tempo massimo di attesa per ogni porta
+        # Creazione Embed Jukebox
+        embed = discord.Embed(
+            title="🎶 Jukebox d'Elite",
+            description=f"**In riproduzione:**\n[{title}]({canzone})",
+            color=0x2f3136 # Grigio scuro elegante
+        )
+        if thumb:
+            embed.set_image(url=thumb)
         
-        result = s.connect_ex((ip, port)) # Ritorna 0 se la porta è aperta
-        if result == 0:
-            await ctx.send(f"✅ **Porta aperta trovata!**\nIP: `{ip}`\nPorta: `{port}`")
-            found = True
-            s.close()
-            break # Si ferma alla prima porta trovata
-        s.close()
+        embed.add_field(name="⏱️ Durata", value=duration, inline=True)
+        embed.add_field(name="👤 Richiesto da", value=interaction.user.mention, inline=True)
+        embed.set_footer(text="Usa i bottoni qui sotto per controllare la musica")
 
-    if not found:
-        await ctx.send(f"❌ Scansione completata su `{ip}`. Nessuna porta aperta trovata nel range 1-1024.")
+        view = JukeboxView(vc)
+        await interaction.followup.send(embed=embed, view=view)
 
+    except Exception as e:
+        await interaction.followup.send(f"❌ Errore durante la riproduzione: {e}")
 
-# --- AVVIO ---
+@play.autocomplete('canzone')
+async def play_autocomplete(interaction: discord.Interaction, current: str):
+    return await get_yt_suggestions(current)
+
+@bot.event
+async def on_ready():
+    print(f'--- BOT ONLINE: {bot.user} ---')
+
+# Avvio
 if __name__ == "__main__":
-    keep_alive()
-    token = os.environ.get("DISCORD_TOKEN")
-    if token:
-        bot.run(token)
+    bot.run(TOKEN)
