@@ -1,9 +1,5 @@
-discord.py
-locust
-flask
-discord.py
-aiohttp
-discord.py
+discord.py[voice]
 yt-dlp
 PyNaCl
 python-dotenv
+flask
