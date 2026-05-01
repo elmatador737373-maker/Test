@@ -3,3 +3,7 @@ locust
 flask
 discord.py
 aiohttp
+discord.py
+yt-dlp
+PyNaCl
+python-dotenv
