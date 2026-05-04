@@ -8,24 +8,24 @@ from dotenv import load_dotenv
 from flask import Flask
 from threading import Thread
 
-# --- SERVER FLASK (PER RENDER) ---
+# --- SERVER FLASK ---
 app = Flask('')
 @app.route('/')
-def home(): return "Multi-Source Jukebox Online!"
+def home(): return "SoundCloud Jukebox Online!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# --- CONFIGURAZIONE MULTI-SORGENTE ---
-# SoundCloud è la sorgente predefinita per le ricerche testuali per evitare blocchi
+# --- CONFIGURAZIONE YDL ---
 YDL_OPTS = {
     'format': 'bestaudio/best',
     'quiet': True,
     'no_warnings': True,
-    'default_search': 'scsearch', # Cerca su SoundCloud se non è un URL
-    'source_address': '0.0.0.0',
+    'default_search': 'scsearch',
     'nocheckcertificate': True,
+    # Aggiungiamo un'identità per non essere bloccati
+    'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 }
 
 FFMPEG_OPTIONS = {
@@ -33,7 +33,6 @@ FFMPEG_OPTIONS = {
     'options': '-vn',
 }
 
-# --- CONFIGURAZIONE BOT ---
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 
@@ -46,7 +45,6 @@ class MusicBot(commands.Bot):
 
     async def setup_hook(self):
         await self.tree.sync()
-        print("✅ Comandi Multi-Source sincronizzati.")
 
 bot = MusicBot()
 
@@ -58,11 +56,11 @@ def play_next(interaction):
         if vc:
             vc.play(discord.FFmpegPCMAudio(next_song['url'], **FFMPEG_OPTIONS), 
                     after=lambda e: play_next(interaction))
-            
-            embed = discord.Embed(title="🎵 In coda ora", description=next_song['title'], color=0x00ff00)
-            asyncio.run_coroutine_threadsafe(interaction.channel.send(embed=embed), bot.loop)
+            asyncio.run_coroutine_threadsafe(
+                interaction.channel.send(f"🟠 Ora in riproduzione: **{next_song['title']}**"), 
+                bot.loop
+            )
 
-# --- INTERFACCIA JUKEBOX ---
 class JukeboxView(ui.View):
     def __init__(self, vc):
         super().__init__(timeout=None)
@@ -72,16 +70,10 @@ class JukeboxView(ui.View):
     async def pause_resume(self, interaction: discord.Interaction, button: ui.Button):
         if self.vc.is_playing():
             self.vc.pause()
-            await interaction.response.send_message("⏸️ Pausa", ephemeral=True)
-        elif self.vc.is_paused():
+            await interaction.response.send_message("⏸️ In pausa", ephemeral=True)
+        else:
             self.vc.resume()
-            await interaction.response.send_message("▶️ Ripresa", ephemeral=True)
-
-    @ui.button(label="⏭️ Skip", style=discord.ButtonStyle.secondary)
-    async def skip(self, interaction: discord.Interaction, button: ui.Button):
-        if self.vc and (self.vc.is_playing() or self.vc.is_paused()):
-            self.vc.stop()
-            await interaction.response.send_message("⏭️ Canzone saltata", ephemeral=True)
+            await interaction.response.send_message("▶️ Ripreso", ephemeral=True)
 
     @ui.button(label="⏹️ Stop", style=discord.ButtonStyle.danger)
     async def stop(self, interaction: discord.Interaction, button: ui.Button):
@@ -89,69 +81,65 @@ class JukeboxView(ui.View):
         if self.vc: await self.vc.disconnect()
         await interaction.response.edit_message(content="⏹️ Sessione terminata.", embed=None, view=None)
 
-# --- COMANDI ---
-
-@bot.tree.command(name="play", description="Suona musica da SoundCloud, Bandcamp o URL")
-@app_commands.describe(canzone="Titolo o link (Sorgente predefinita: SoundCloud)")
+# --- COMANDO PLAY ---
+@bot.tree.command(name="play", description="Cerca e riproduci da SoundCloud")
 async def play(interaction: discord.Interaction, canzone: str):
     await interaction.response.defer(thinking=True)
     
     if not interaction.user.voice:
-        return await interaction.followup.send("❌ Devi essere in un canale vocale!")
+        return await interaction.followup.send("❌ Entra in un canale vocale!")
 
     try:
         vc = interaction.guild.voice_client or await interaction.user.voice.channel.connect(self_deaf=True)
 
         with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
-            # Se l'utente mette un URL, yt-dlp lo riconosce, altrimenti cerca su SoundCloud
-            info = ydl.extract_info(canzone, download=False)
-            if 'entries' in info: info = info['entries'][0]
+            # Se l'input non è un link, aggiungiamo scsearch: esplicitamente
+            search_query = canzone if canzone.startswith('http') else f"scsearch1:{canzone}"
             
-            data = {
-                'url': info['url'], 
-                'title': info.get('title', 'Titolo sconosciuto'), 
-                'thumb': info.get('thumbnail'),
-                'original_url': info.get('webpage_url')
-            }
+            # Usiamo il loop per non bloccare il bot durante la ricerca
+            info = await bot.loop.run_in_executor(None, lambda: ydl.extract_info(search_query, download=False))
+            
+            if 'entries' in info:
+                if not info['entries']:
+                    return await interaction.followup.send("❌ Nessun risultato trovato su SoundCloud.")
+                info = info['entries'][0]
+            
+            data = {'url': info['url'], 'title': info['title'], 'thumb': info.get('thumbnail')}
 
         if vc.is_playing() or vc.is_paused():
             bot.queue.append(data)
             await interaction.followup.send(f"✅ Aggiunto alla coda: **{data['title']}**")
         else:
             vc.play(discord.FFmpegPCMAudio(data['url'], **FFMPEG_OPTIONS), after=lambda e: play_next(interaction))
-            
-            embed = discord.Embed(
-                title="🎶 Multi-Source Jukebox", 
-                description=f"**In riproduzione:**\n{data['title']}\n\n*Sorgente: {data['original_url']}*", 
-                color=0xff5500 # Colore arancio SoundCloud
-            )
+            embed = discord.Embed(title="🟠 Jukebox SoundCloud", description=f"Suonando: **{data['title']}**", color=0xff5500)
             if data['thumb']: embed.set_image(url=data['thumb'])
             await interaction.followup.send(embed=embed, view=JukeboxView(vc))
 
     except Exception as e:
-        await interaction.followup.send(f"❌ Errore nel caricamento: {e}")
+        print(f"Errore Play: {e}")
+        await interaction.followup.send(f"❌ Errore durante la ricerca: {e}")
 
-@bot.tree.command(name="queue", description="Mostra la coda attuale")
-async def queue(interaction: discord.Interaction):
-    if not bot.queue:
-        return await interaction.response.send_message("La coda è vuota.")
-    lista = "\n".join([f"{i+1}. {s['title']}" for i, s in enumerate(bot.queue[:10])])
-    await interaction.response.send_message(f"📜 **Coda:**\n{lista}")
-
+# --- AUTOCOMPLETE ---
 @play.autocomplete('canzone')
 async def play_autocomplete(interaction: discord.Interaction, current: str):
-    if len(current) < 3: return []
+    if not current or len(current) < 3:
+        return []
+    
     try:
-        # Autocomplete focalizzato su SoundCloud per velocità e affidabilità
         with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
-            loop = asyncio.get_event_loop()
-            info = await loop.run_in_executor(None, lambda: ydl.extract_info(f"scsearch5:{current}", download=False))
+            # Ricerca veloce di 5 brani
+            info = await bot.loop.run_in_executor(None, lambda: ydl.extract_info(f"scsearch5:{current}", download=False))
             
+            if 'entries' not in info:
+                return []
+
             return [
                 app_commands.Choice(name=f"🟠 {e['title'][:90]}", value=e.get('webpage_url', e['url'])) 
-                for e in info['entries']
+                for e in info['entries'] if e.get('title')
             ]
-    except: return []
+    except Exception as e:
+        print(f"Errore Autocomplete: {e}")
+        return []
 
 if __name__ == "__main__":
     Thread(target=run_flask).start()
