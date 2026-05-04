@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from flask import Flask
 from threading import Thread
 
-# --- SERVER FLASK (PER RENDER/UPTIME) ---
+# --- SERVER FLASK (PER RENDER) ---
 app = Flask('')
 @app.route('/')
 def home(): return "Jukebox Online!"
@@ -17,14 +17,27 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# --- CONFIGURAZIONE BOT ---
-load_dotenv()
-TOKEN = os.getenv('DISCORD_TOKEN')
+# --- CONFIGURAZIONE YOUTUBE (MODIFICA ANDROID) ---
+YDL_OPTS = {
+    'format': 'bestaudio/best',
+    'quiet': True,
+    'no_warnings': True,
+    'source_address': '0.0.0.0',
+    'extractor_args': {
+        'youtube': {
+            'player_client': ['android', 'web']
+        }
+    }
+}
 
 FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
     'options': '-vn',
 }
+
+# --- CONFIGURAZIONE BOT ---
+load_dotenv()
+TOKEN = os.getenv('DISCORD_TOKEN')
 
 class MusicBot(commands.Bot):
     def __init__(self):
@@ -35,7 +48,7 @@ class MusicBot(commands.Bot):
 
     async def setup_hook(self):
         await self.tree.sync()
-        print(f"✅ Slash Commands sincronizzati.")
+        print("✅ Comandi sincronizzati.")
 
 bot = MusicBot()
 
@@ -48,7 +61,6 @@ def play_next(interaction):
             vc.play(discord.FFmpegPCMAudio(next_song['url'], **FFMPEG_OPTIONS), 
                     after=lambda e: play_next(interaction))
             
-            # Messaggio automatico per la prossima canzone
             embed = discord.Embed(title="🎵 Prossimo brano", description=next_song['title'], color=0x00ff00)
             asyncio.run_coroutine_threadsafe(interaction.channel.send(embed=embed), bot.loop)
 
@@ -78,82 +90,57 @@ class JukeboxView(ui.View):
     @ui.button(label="⏹️ Stop", style=discord.ButtonStyle.danger)
     async def stop(self, interaction: discord.Interaction, button: ui.Button):
         bot.queue.clear()
-        await self.vc.disconnect()
-        await interaction.response.edit_message(content="⏹️ Sessione terminata e coda svuotata.", embed=None, view=None)
+        if self.vc: await self.vc.disconnect()
+        await interaction.response.edit_message(content="⏹️ Sessione terminata.", embed=None, view=None)
 
 # --- COMANDI ---
 
-@bot.tree.command(name="play", description="Riproduci una canzone o aggiungila alla coda")
-@app_commands.describe(canzone="Cerca il titolo o incolla il link")
+@bot.tree.command(name="play", description="Suona una canzone")
+@app_commands.describe(canzone="Titolo o link YouTube")
 async def play(interaction: discord.Interaction, canzone: str):
-    await interaction.response.defer()
+    await interaction.response.defer(thinking=True)
     
     if not interaction.user.voice:
         return await interaction.followup.send("❌ Entra in un canale vocale!")
 
-    vc = interaction.guild.voice_client or await interaction.user.voice.channel.connect(self_deaf=True)
+    try:
+        vc = interaction.guild.voice_client or await interaction.user.voice.channel.connect(self_deaf=True)
 
-    with yt_dlp.YoutubeDL({'format': 'bestaudio', 'quiet': True, 'no_warnings': True}) as ydl:
-        try:
+        with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
             info = ydl.extract_info(canzone, download=False)
             if 'entries' in info: info = info['entries'][0]
             data = {'url': info['url'], 'title': info['title'], 'thumb': info.get('thumbnail')}
-        except Exception as e:
-            return await interaction.followup.send(f"❌ Errore nel caricamento: {e}")
 
-    if vc.is_playing() or vc.is_paused():
-        bot.queue.append(data)
-        await interaction.followup.send(f"✅ Aggiunto alla coda: **{data['title']}**")
-    else:
-        vc.play(discord.FFmpegPCMAudio(data['url'], **FFMPEG_OPTIONS), after=lambda e: play_next(interaction))
-        
-        embed = discord.Embed(title="🎶 Jukebox d'Elite", description=f"**In riproduzione:**\n{data['title']}", color=0x2f3136)
-        if data['thumb']: embed.set_image(url=data['thumb'])
-        embed.set_footer(text=f"Richiesto da {interaction.user.display_name}")
-        
-        await interaction.followup.send(embed=embed, view=JukeboxView(vc))
+        if vc.is_playing() or vc.is_paused():
+            bot.queue.append(data)
+            await interaction.followup.send(f"✅ Aggiunto alla coda: **{data['title']}**")
+        else:
+            vc.play(discord.FFmpegPCMAudio(data['url'], **FFMPEG_OPTIONS), after=lambda e: play_next(interaction))
+            
+            embed = discord.Embed(title="🎶 Jukebox d'Elite", description=f"**In riproduzione:**\n{data['title']}", color=0x2f3136)
+            if data['thumb']: embed.set_image(url=data['thumb'])
+            await interaction.followup.send(embed=embed, view=JukeboxView(vc))
 
-@bot.tree.command(name="queue", description="Mostra le prossime canzoni")
+    except Exception as e:
+        await interaction.followup.send(f"❌ Errore: {e}")
+
+@bot.tree.command(name="queue", description="Mostra la coda")
 async def queue(interaction: discord.Interaction):
     if not bot.queue:
-        return await interaction.response.send_message("La coda è attualmente vuota.")
-    
-    msg = "**📜 Coda attuale:**\n" + "\n".join([f"{i+1}. {s['title']}" for i, s in enumerate(bot.queue[:10])])
-    await interaction.response.send_message(msg)
+        return await interaction.response.send_message("Coda vuota.")
+    lista = "\n".join([f"{i+1}. {s['title']}" for i, s in enumerate(bot.queue[:10])])
+    await interaction.response.send_message(f"📜 **Coda:**\n{lista}")
 
-@bot.tree.command(name="volume", description="Cambia il volume (0-100)")
-async def volume(interaction: discord.Interaction, livello: int):
-    vc = interaction.guild.voice_client
-    if vc and vc.source:
-        if 0 <= livello <= 100:
-            # Applichiamo il trasformatore di volume se non presente
-            if not isinstance(vc.source, discord.PCMVolumeTransformer):
-                vc.source = discord.PCMVolumeTransformer(vc.source)
-            vc.source.volume = livello / 100
-            await interaction.response.send_message(f"🔊 Volume impostato al {livello}%")
-        else:
-            await interaction.response.send_message("Inserisci un numero tra 0 e 100.", ephemeral=True)
-
-# --- AUTOCOMPLETE VELOCE ---
 @play.autocomplete('canzone')
 async def play_autocomplete(interaction: discord.Interaction, current: str):
     if len(current) < 3: return []
     try:
-        # Ricerca rapidissima usando extract_flat
-        ydl_opts = {'quiet': True, 'extract_flat': True, 'force_generic_extractor': False}
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
             loop = asyncio.get_event_loop()
             info = await loop.run_in_executor(None, lambda: ydl.extract_info(f"ytsearch5:{current}", download=False))
-            
-            choices = []
-            for e in info['entries']:
-                title = e.get('title', 'Video senza titolo')[:90]
-                url = f"https://www.youtube.com/watch?v={e['id']}" if 'id' in e else e.get('url')
-                if url:
-                    choices.append(app_commands.Choice(name=f"🎵 {title}", value=url))
-            return choices
-    except:
-        return []
+            return [app_commands.Choice(name=f"🎵 {e['title'][:90]}", value=f"https://www.youtube.com/watch?v={e['id']}") 
+                    for e in info['entries'] if 'id' in e]
+    except: return []
 
 if __name__ == "__main__":
     Thread(target=run_flask).start()
