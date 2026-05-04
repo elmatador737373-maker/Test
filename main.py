@@ -11,22 +11,23 @@ from threading import Thread
 # --- SERVER FLASK ---
 app = Flask('')
 @app.route('/')
-def home(): return "Jukebox Pro Online!"
+def home(): return "Jukebox Max Results Online!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# --- CONFIGURAZIONE AUDIO AVANZATA ---
+# --- CONFIGURAZIONE YDL ---
 YDL_OPTS = {
     'format': 'bestaudio/best',
     'quiet': True,
+    'no_warnings': True,
     'default_search': 'scsearch',
     'nocheckcertificate': True,
+    'ignoreerrors': True,
     'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 }
 
-# Correzione velocità: aggiungiamo 'aresample=48000' per sincronizzare con Discord
 FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
     'options': '-vn -filter:a "volume=1.0,aresample=48000"',
@@ -54,8 +55,8 @@ def play_next(interaction):
         next_song = bot.queue.pop(0)
         vc = interaction.guild.voice_client
         if vc:
-            # Applichiamo il volume corrente anche al brano successivo
-            opts = FFMPEG_OPTIONS['options'].replace("volume=1.0", f"volume={bot.current_volume}")
+            vol_str = f"volume={bot.current_volume}"
+            opts = FFMPEG_OPTIONS['options'].replace("volume=1.0", vol_str)
             source = discord.FFmpegPCMAudio(next_song['url'], before_options=FFMPEG_OPTIONS['before_options'], options=opts)
             vc.play(source, after=lambda e: play_next(interaction))
             
@@ -64,7 +65,7 @@ def play_next(interaction):
                 bot.loop
             )
 
-# --- INTERFACCIA JUKEBOX COMPLETA ---
+# --- INTERFACCIA ---
 class JukeboxView(ui.View):
     def __init__(self, vc):
         super().__init__(timeout=None)
@@ -82,27 +83,21 @@ class JukeboxView(ui.View):
     @ui.button(label="⏭️ Skip", style=discord.ButtonStyle.secondary)
     async def skip(self, interaction: discord.Interaction, button: ui.Button):
         if self.vc:
-            self.vc.stop() # Questo triggera automaticamente play_next
-            await interaction.response.send_message("⏭️ Canzone saltata!", ephemeral=True)
+            self.vc.stop()
+            await interaction.response.send_message("⏭️ Canzone saltata", ephemeral=True)
 
-    @ui.button(label="🔊 Vol +", style=discord.ButtonStyle.gray)
+    @ui.button(label="🔊 +", style=discord.ButtonStyle.gray)
     async def vol_up(self, interaction: discord.Interaction, button: ui.Button):
         bot.current_volume = min(bot.current_volume + 0.2, 2.0)
         await interaction.response.send_message(f"🔊 Volume: {int(bot.current_volume*100)}%", ephemeral=True)
 
-    @ui.button(label="🔉 Vol -", style=discord.ButtonStyle.gray)
+    @ui.button(label="🔉 -", style=discord.ButtonStyle.gray)
     async def vol_down(self, interaction: discord.Interaction, button: ui.Button):
         bot.current_volume = max(bot.current_volume - 0.2, 0.1)
         await interaction.response.send_message(f"🔉 Volume: {int(bot.current_volume*100)}%", ephemeral=True)
 
-    @ui.button(label="⏹️ Stop", style=discord.ButtonStyle.danger)
-    async def stop(self, interaction: discord.Interaction, button: ui.Button):
-        bot.queue.clear()
-        if self.vc: await self.vc.disconnect()
-        await interaction.response.edit_message(content="⏹️ Sessione terminata.", embed=None, view=None)
-
-# --- COMANDI ---
-@bot.tree.command(name="play", description="Riproduci qualsiasi canzone")
+# --- COMANDO PLAY ---
+@bot.tree.command(name="play", description="Riproduci musica (Sorgente: SoundCloud)")
 async def play(interaction: discord.Interaction, canzone: str):
     await interaction.response.defer(thinking=True)
     
@@ -113,13 +108,14 @@ async def play(interaction: discord.Interaction, canzone: str):
         vc = interaction.guild.voice_client or await interaction.user.voice.channel.connect(self_deaf=True)
 
         with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
-            # Ricerca potenziata: prova SoundCloud, poi Bandcamp
+            # Se l'input è già un link (da autocomplete o incollo), lo usa direttamente
             info = await bot.loop.run_in_executor(None, lambda: ydl.extract_info(canzone, download=False))
             
             if 'entries' in info:
-                if not info['entries']:
-                    return await interaction.followup.send("❌ Nessuna canzone trovata con questo nome.")
-                info = info['entries'][0]
+                valid_entries = [e for e in info['entries'] if e is not None]
+                if not valid_entries:
+                    return await interaction.followup.send("❌ Nessun brano trovato.")
+                info = valid_entries[0]
             
             data = {'url': info['url'], 'title': info['title'], 'thumb': info.get('thumbnail')}
 
@@ -127,28 +123,34 @@ async def play(interaction: discord.Interaction, canzone: str):
             bot.queue.append(data)
             await interaction.followup.send(f"✅ In coda: **{data['title']}**")
         else:
-            opts = FFMPEG_OPTIONS['options'].replace("volume=1.0", f"volume={bot.current_volume}")
+            vol_str = f"volume={bot.current_volume}"
+            opts = FFMPEG_OPTIONS['options'].replace("volume=1.0", vol_str)
             source = discord.FFmpegPCMAudio(data['url'], before_options=FFMPEG_OPTIONS['before_options'], options=opts)
             vc.play(source, after=lambda e: play_next(interaction))
             
-            embed = discord.Embed(title="🎶 Jukebox d'Elite", description=f"**In riproduzione:**\n{data['title']}", color=0x2f3136)
+            embed = discord.Embed(title="🎶 Jukebox d'Elite", description=f"**In riproduzione:**\n{data['title']}", color=0xff5500)
             if data['thumb']: embed.set_image(url=data['thumb'])
             await interaction.followup.send(embed=embed, view=JukeboxView(vc))
 
     except Exception as e:
         await interaction.followup.send(f"❌ Errore: {e}")
 
+# --- AUTOCOMPLETE MASSIMIZZATO (25 RISULTATI) ---
 @play.autocomplete('canzone')
 async def play_autocomplete(interaction: discord.Interaction, current: str):
     if len(current) < 2: return []
     try:
         with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
-            # Cerchiamo su SoundCloud (molto più veloce per l'autocomplete)
-            info = await bot.loop.run_in_executor(None, lambda: ydl.extract_info(f"scsearch10:{current}", download=False))
-            return [
-                app_commands.Choice(name=f"🎵 {e['title'][:90]}", value=e.get('webpage_url', e['url'])) 
-                for e in info['entries'] if e.get('title')
-            ][:25]
+            # Chiediamo 30 risultati per essere sicuri di averne 25 validi dopo i filtri
+            info = await bot.loop.run_in_executor(None, lambda: ydl.extract_info(f"scsearch30:{current}", download=False))
+            
+            choices = []
+            for e in info['entries']:
+                if e and len(choices) < 25: # Limite fisico di Discord
+                    title = f"🎵 {e['title'][:85]}"
+                    # Passiamo l'URL come valore per una riproduzione immediata
+                    choices.append(app_commands.Choice(name=title, value=e.get('webpage_url', e['url'])))
+            return choices
     except: return []
 
 if __name__ == "__main__":
