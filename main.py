@@ -1,158 +1,84 @@
 import discord
-import os
-import yt_dlp
+from discord import app_commands
+import requests
 import asyncio
-from discord import app_commands, ui
-from discord.ext import commands
-from dotenv import load_dotenv
-from flask import Flask
-from threading import Thread
 
-# --- SERVER FLASK ---
-app = Flask('')
-@app.route('/')
-def home(): return "Jukebox Max Results Online!"
+# Configurazione del bot con tutti gli intenti necessari
+intents = discord.Intents.default()
+intents.message_content = True
+intents.guilds = True
+intents.emojis = True
 
-def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
-
-# --- CONFIGURAZIONE YDL ---
-YDL_OPTS = {
-    'format': 'bestaudio/best',
-    'quiet': True,
-    'no_warnings': True,
-    'default_search': 'scsearch',
-    'nocheckcertificate': True,
-    'ignoreerrors': True,
-    'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-}
-
-FFMPEG_OPTIONS = {
-    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-    'options': '-vn -filter:a "volume=1.0,aresample=48000"',
-}
-
-load_dotenv()
-TOKEN = os.getenv('DISCORD_TOKEN')
-
-class MusicBot(commands.Bot):
+class EmojiCloner(discord.Client):
     def __init__(self):
-        intents = discord.Intents.default()
-        intents.message_content = True
-        super().__init__(command_prefix="!", intents=intents)
-        self.queue = [] 
-        self.current_volume = 1.0
+        super().__init__(intents=intents)
+        self.tree = app_commands.CommandTree(self)
 
-    async def setup_hook(self):
+    async def on_ready(self):
+        # Sincronizza i comandi slash globalmente
         await self.tree.sync()
+        print(f'✅ Bot connesso come {self.user}')
 
-bot = MusicBot()
+client = EmojiCloner()
 
-# --- LOGICA DI RIPRODUZIONE ---
-def play_next(interaction):
-    if len(bot.queue) > 0:
-        next_song = bot.queue.pop(0)
-        vc = interaction.guild.voice_client
-        if vc:
-            vol_str = f"volume={bot.current_volume}"
-            opts = FFMPEG_OPTIONS['options'].replace("volume=1.0", vol_str)
-            source = discord.FFmpegPCMAudio(next_song['url'], before_options=FFMPEG_OPTIONS['before_options'], options=opts)
-            vc.play(source, after=lambda e: play_next(interaction))
-            
-            asyncio.run_coroutine_threadsafe(
-                interaction.channel.send(f"⏭️ **In riproduzione:** {next_song['title']}"), 
-                bot.loop
-            )
+@client.tree.command(name="clona_emoji", description="Copia le emoji da un server a questo usando l'ID del server sorgente.")
+@app_commands.describe(source_guild_id="L'ID del server da cui vuoi copiare le emoji")
+async def clona_emoji(interaction: discord.Interaction, source_guild_id: str):
+    # Rispondi subito per evitare il timeout di Discord (3 secondi)
+    await interaction.response.defer(ephemeral=True)
 
-# --- INTERFACCIA ---
-class JukeboxView(ui.View):
-    def __init__(self, vc):
-        super().__init__(timeout=None)
-        self.vc = vc
+    # Verifica i permessi dell'utente nel server attuale
+    if not interaction.user.guild_permissions.manage_expressions:
+        await interaction.followup.send("❌ Non hai il permesso 'Gestisci espressioni' (emoji) in questo server.", ephemeral=True)
+        return
 
-    @ui.button(label="⏯️ Pausa/Play", style=discord.ButtonStyle.blurple)
-    async def pause_resume(self, interaction: discord.Interaction, button: ui.Button):
-        if self.vc.is_playing():
-            self.vc.pause()
-            await interaction.response.send_message("⏸️ Pausa", ephemeral=True)
-        else:
-            self.vc.resume()
-            await interaction.response.send_message("▶️ Ripreso", ephemeral=True)
-
-    @ui.button(label="⏭️ Skip", style=discord.ButtonStyle.secondary)
-    async def skip(self, interaction: discord.Interaction, button: ui.Button):
-        if self.vc:
-            self.vc.stop()
-            await interaction.response.send_message("⏭️ Canzone saltata", ephemeral=True)
-
-    @ui.button(label="🔊 +", style=discord.ButtonStyle.gray)
-    async def vol_up(self, interaction: discord.Interaction, button: ui.Button):
-        bot.current_volume = min(bot.current_volume + 0.2, 2.0)
-        await interaction.response.send_message(f"🔊 Volume: {int(bot.current_volume*100)}%", ephemeral=True)
-
-    @ui.button(label="🔉 -", style=discord.ButtonStyle.gray)
-    async def vol_down(self, interaction: discord.Interaction, button: ui.Button):
-        bot.current_volume = max(bot.current_volume - 0.2, 0.1)
-        await interaction.response.send_message(f"🔉 Volume: {int(bot.current_volume*100)}%", ephemeral=True)
-
-# --- COMANDO PLAY ---
-@bot.tree.command(name="play", description="Riproduci musica (Sorgente: SoundCloud)")
-async def play(interaction: discord.Interaction, canzone: str):
-    await interaction.response.defer(thinking=True)
-    
-    if not interaction.user.voice:
-        return await interaction.followup.send("❌ Devi essere in un canale vocale!")
-
+    # Trova il server sorgente
     try:
-        vc = interaction.guild.voice_client or await interaction.user.voice.channel.connect(self_deaf=True)
+        source_guild = client.get_guild(int(source_guild_id))
+    except ValueError:
+        await interaction.followup.send("❌ ID server non valido. Inserisci solo numeri.", ephemeral=True)
+        return
 
-        with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
-            # Se l'input è già un link (da autocomplete o incollo), lo usa direttamente
-            info = await bot.loop.run_in_executor(None, lambda: ydl.extract_info(canzone, download=False))
-            
-            if 'entries' in info:
-                valid_entries = [e for e in info['entries'] if e is not None]
-                if not valid_entries:
-                    return await interaction.followup.send("❌ Nessun brano trovato.")
-                info = valid_entries[0]
-            
-            data = {'url': info['url'], 'title': info['title'], 'thumb': info.get('thumbnail')}
+    if not source_guild:
+        await interaction.followup.send("❌ Non sono riuscito a trovare il server sorgente. Assicurati che il bot sia presente anche lì!", ephemeral=True)
+        return
 
-        if vc.is_playing() or vc.is_paused():
-            bot.queue.append(data)
-            await interaction.followup.send(f"✅ In coda: **{data['title']}**")
-        else:
-            vol_str = f"volume={bot.current_volume}"
-            opts = FFMPEG_OPTIONS['options'].replace("volume=1.0", vol_str)
-            source = discord.FFmpegPCMAudio(data['url'], before_options=FFMPEG_OPTIONS['before_options'], options=opts)
-            vc.play(source, after=lambda e: play_next(interaction))
-            
-            embed = discord.Embed(title="🎶 Jukebox d'Elite", description=f"**In riproduzione:**\n{data['title']}", color=0xff5500)
-            if data['thumb']: embed.set_image(url=data['thumb'])
-            await interaction.followup.send(embed=embed, view=JukeboxView(vc))
+    target_guild = interaction.guild
+    emojis_to_copy = source_guild.emojis
 
-    except Exception as e:
-        await interaction.followup.send(f"❌ Errore: {e}")
+    if not emojis_to_copy:
+        await interaction.followup.send(f"⚠️ Il server `{source_guild.name}` non ha emoji da copiare.", ephemeral=True)
+        return
 
-# --- AUTOCOMPLETE MASSIMIZZATO (25 RISULTATI) ---
-@play.autocomplete('canzone')
-async def play_autocomplete(interaction: discord.Interaction, current: str):
-    if len(current) < 2: return []
-    try:
-        with yt_dlp.YoutubeDL(YDL_OPTS) as ydl:
-            # Chiediamo 30 risultati per essere sicuri di averne 25 validi dopo i filtri
-            info = await bot.loop.run_in_executor(None, lambda: ydl.extract_info(f"scsearch30:{current}", download=False))
-            
-            choices = []
-            for e in info['entries']:
-                if e and len(choices) < 25: # Limite fisico di Discord
-                    title = f"🎵 {e['title'][:85]}"
-                    # Passiamo l'URL come valore per una riproduzione immediata
-                    choices.append(app_commands.Choice(name=title, value=e.get('webpage_url', e['url'])))
-            return choices
-    except: return []
+    await interaction.followup.send(f"🔄 Trovate {len(emojis_to_copy)} emoji. Inizio la copia in `{target_guild.name}`...", ephemeral=True)
 
-if __name__ == "__main__":
-    Thread(target=run_flask).start()
-    bot.run(TOKEN)
+    copiate = 0
+    errori = 0
+
+    for emoji in emojis_to_copy:
+        # Controlla se l'emoji esiste già per nome (evita duplicati)
+        existing = discord.utils.get(target_guild.emojis, name=emoji.name)
+        if existing:
+            continue
+
+        try:
+            # Scarica l'immagine dell'emoji
+            response = requests.get(emoji.url)
+            if response.status_code == 200:
+                # Crea l'emoji nel server di destinazione
+                await target_guild.create_custom_emoji(name=emoji.name, image=response.content)
+                copiate += 1
+                # Piccolo delay per evitare il rate-limit di Discord
+                await asyncio.sleep(1)
+        except discord.HTTPException as e:
+            print(f"Errore durante la copia di {emoji.name}: {e}")
+            errori += 1
+        except Exception as e:
+            print(f"Errore generico: {e}")
+            errori += 1
+
+    await interaction.followup.send(f"✅ Processo completato!\n🔹 Emoji copiate con successo: {copiate}\n⚠️ Errori/Limiti raggiunti: {errori}", ephemeral=True)
+
+# Inserisci qui il token del tuo bot preso dal Developer Portal
+TOKEN = "IL_TUO_TOKEN_QUI"
+client.run(TOKEN)
