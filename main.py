@@ -42,10 +42,19 @@ class EmojiCloner(discord.Client):
         self.tree = app_commands.CommandTree(self)
 
     async def on_ready(self):
-        # Svuota i vecchi comandi buggati dalla cache di Discord e sincronizza
-        self.tree.clear_commands(guild=None)
+        # 1. Sincronizzazione globale standard
         await self.tree.sync()
-        print(f'✅ Bot connesso come {self.user} e comandi resettati!')
+        
+        # 2. Sincronizzazione FORZATA su ogni server in cui si trova il bot
+        for guild in self.guilds:
+            try:
+                self.tree.copy_global_to(guild=guild)
+                await self.tree.sync(guild=guild)
+                print(f"⚡ Comandi sincronizzati istantaneamente nel server: {guild.name}")
+            except Exception as e:
+                print(f"Impossibile sincronizzare nel server {guild.name}: {e}")
+
+        print(f'✅ Bot connesso come {self.user} e comandi pronti!')
 
 client = EmojiCloner()
 
