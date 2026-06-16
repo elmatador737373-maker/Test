@@ -5,6 +5,28 @@ from discord import app_commands
 import requests
 # Importa la libreria per caricare il file .env
 from dotenv import load_dotenv
+import os
+import threading
+from flask import Flask
+
+# 1. Inizializza l'applicazione Flask
+app = Flask('')
+
+@app.route('/')
+def home():
+    # Questa pagina risponde al ping di Render (o di UptimeRobot)
+    return "Bot Online!", 200
+
+def run_flask():
+    # Porta dinamica assegnata automaticamente da Render, altrimenti usa la 8080 localmente
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    # Avvia Flask in un thread separato per evitare di bloccare il loop del bot Discord
+    t = threading.Thread(target=run_flask)
+    t.daemon = True  # Permette al thread di chiudersi correttamente se il bot si ferma
+    t.start()
 
 # Carica le variabili d'ambiente dal file .env
 load_dotenv()
@@ -78,8 +100,8 @@ async def clona_emoji(interaction: discord.Interaction, source_guild_id: str):
 
     await interaction.followup.send(f"✅ Processo completato!\n🔹 Emoji copiate: {copiate}\n⚠️ Errori/Limiti raggiunti: {errori}", ephemeral=True)
 
-# Avvia il bot controllando che il token esista
-if TOKEN:
-    client.run(TOKEN)
-else:
-    print("❌ Errore: DISCORD_TOKEN non trovato nel file .env. Verifica la configurazione.")
+# Avvia il server web Flask in background
+keep_alive()
+
+# Avvia il bot Discord
+client.run(TOKEN)
