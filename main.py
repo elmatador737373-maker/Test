@@ -50,7 +50,10 @@ client = EmojiCloner()
 # ==========================================
 # COMANDO 1: CLONA EMOTE (CON LOG EPHEMERAL)
 # ==========================================
-@client.tree.command(name="clona_emoji", description="Copia le emoji mostrando l'avanzamento in tempo reale.")
+# ==========================================
+# COMANDO CLONA: VERSIONE ANTI-BLOCCO 5 EMOJI
+# ==========================================
+@client.tree.command(name="clona_emoji", description="Copia le emoji rallentando il ritmo per evitare il blocco di Discord.")
 @app_commands.describe(source_guild_id="L'ID del server da cui vuoi copiare le emoji")
 async def clona_emoji(interaction: discord.Interaction, source_guild_id: str):
     await interaction.response.defer(ephemeral=True)
@@ -78,7 +81,7 @@ async def clona_emoji(interaction: discord.Interaction, source_guild_id: str):
         return
 
     status_message = await interaction.followup.send(
-        f"🔄 **Clonazione avviata!**\n📦 Server sorgente: `{source_guild.name}`\n🔮 Totale: **{totale_emoji}**\n⏳ Analisi prima emoji...", 
+        f"🔄 **Clonazione avviata!**\n📦 Server sorgente: `{source_guild.name}`\n🔮 Totale: **{totale_emoji}**\n⏳ Controllo duplicati in corso...", 
         ephemeral=True
     )
 
@@ -88,61 +91,65 @@ async def clona_emoji(interaction: discord.Interaction, source_guild_id: str):
     analizzate = 0
     lista_log_recenti = []
 
-    timeout_config = aiohttp.ClientTimeout(total=4)
+    timeout_config = aiohttp.ClientTimeout(total=10) # Timeout alzato a 10s per connessioni stabili
 
     async with aiohttp.ClientSession(timeout=timeout_config) as session:
         for emoji in emojis_to_copy:
             analizzate += 1
             
-            if analizzate == 1 or analizzate % 5 == 0 or analizzate == totale_emoji:
-                testo_cronologia = "\n".join(lista_log_recenti) if lista_log_recenti else "Inizializzazione..."
-                percentuale = int((analizzate / totale_emoji) * 100)
-                barra = "🟩" * int(percentuale / 10) + "⬛" * (10 - int(percentuale / 10))
-                try:
-                    await status_message.edit(content=f"🔄 **Clonazione in corso...**\n"
-                                                      f"📊 Avanzamento: {barra} **{percentuale}%** ({analizzate}/{totale_emoji})\n"
-                                                      f"🔎 Sto elaborando: `{emoji.name}`\n\n"
-                                                      f"🔹 Nuove: **{copiate}** | 🔁 Duplicate: **{gia_presenti}** | ⚠️ Errori: **{errori}**\n\n"
-                                                      f"📋 **Ultime azioni:**\n```text\n{testo_cronologia}\n```")
-                except:
-                    pass
-
             existing = discord.utils.get(target_guild.emojis, name=emoji.name)
             if existing:
                 gia_presenti += 1
-                lista_log_recenti.append(f"🔁 Saltata `{emoji.name}` (Già presente)")
-            else:
-                try:
-                    async with session.get(str(emoji.url)) as response:
-                        if response.status == 200:
-                            image_data = await response.read()
-                            await target_guild.create_custom_emoji(name=emoji.name, image=image_data)
-                            copiate += 1
-                            lista_log_recenti.append(f"✅ Copiata: `{emoji.name}`")
-                            await asyncio.sleep(1.5)
-                        else:
-                            lista_log_recenti.append(f"❌ Errore HTTP {response.status} su `{emoji.name}`")
-                            errori += 1
-                except asyncio.TimeoutError:
-                    lista_log_recenti.append(f"⏱️ Timeout su `{emoji.name}`")
-                    errori += 1
-                except discord.RateLimited as e:
-                    lista_log_recenti.append(f"⚠️ Rate limit: attesa di {int(e.retry_after)}s...")
-                    await asyncio.sleep(e.retry_after)
-                except discord.HTTPException as e:
-                    if e.code == 30008: 
-                        lista_log_recenti.append("🚨 Spazio esaurito!")
-                        break
-                    lista_log_recenti.append(f"❌ Errore Discord {e.code}")
-                    errori += 1
-                except Exception:
-                    lista_log_recenti.append(f"❌ Errore su `{emoji.name}`")
-                    errori += 1
+                # Non aggiorniamo lo schermo per ogni duplicato, andiamo dritti al punto
+                continue
+
+            # Forza l'aggiornamento visivo appena trova un'emoji da copiare davvero
+            percentuale = int((analizzate / totale_emoji) * 100)
+            barra = "🟩" * int(percentuale / 10) + "⬛" * (10 - int(percentuale / 10))
+            testo_cronologia = "\n".join(lista_log_recenti) if lista_log_recenti else "Copia in corso..."
+            
+            try:
+                await status_message.edit(content=f"🔄 **Clonazione in corso (Ritmo sicuro)...**\n"
+                                                  f"📊 Avanzamento: {barra} **{percentuale}%** ({analizzate}/{totale_emoji})\n"
+                                                  f"⚡ Sto clonando: `{emoji.name}`\n\n"
+                                                  f"🔹 Nuove: **{copiate}** | 🔁 Duplicate saltate: **{gia_presenti}** | ⚠️ Errori: **{errori}**\n\n"
+                                                  f"📋 **Ultime azioni:**\n```text\n{testo_cronologia}\n```")
+            except: pass
+
+            try:
+                async with session.get(str(emoji.url)) as response:
+                    if response.status == 200:
+                        image_data = await response.read()
+                        await target_guild.create_custom_emoji(name=emoji.name, image=image_data)
+                        copiate += 1
+                        lista_log_recenti.append(f"✅ Copiata: `{emoji.name}`")
+                        
+                        # Alziamo la pausa a 3.5 secondi. È più lento, ma impedisce a Discord di murare il bot alla quinta emoji
+                        await asyncio.sleep(3.5)
+                    else:
+                        lista_log_recenti.append(f"❌ Errore scaricamento su `{emoji.name}`")
+                        errori += 1
+                        
+            except discord.RateLimited as e:
+                # Se becchiamo il blocco, aggiorniamo il log visivo dicendo quanti secondi aspettare
+                attesa = int(e.retry_after) + 2
+                lista_log_recenti.append(f"⚠️ Blocco anti-spam. Pausa forzata di {attesa}s...")
+                await asyncio.sleep(attesa)
+                
+            except discord.HTTPException as e:
+                if e.code == 30008: 
+                    lista_log_recenti.append("🚨 Spazio esaurito!")
+                    break
+                lista_log_recenti.append(f"❌ Errore Discord {e.code}")
+                errori += 1
+            except Exception:
+                lista_log_recenti.append(f"❌ Errore imprevisto su `{emoji.name}`")
+                errori += 1
 
             if len(lista_log_recenti) > 5:
                 lista_log_recenti.pop(0)
 
-    await status_message.edit(content=f"🏆 **Clonazione Completata!**\n📊 Stato finale: **100%** ({totale_emoji}/{totale_emoji})\n\n✨ Nuove emoji aggiunte: **{copiate}**\n🔁 Già presenti: **{gia_presenti}**\n⚠️ Errori totali: **{errori}**")
+    await status_message.edit(content=f"🏆 **Sessione Completata!**\n📊 Conto finale: ({analizzate}/{totale_emoji}) analizzate.\n\n✨ Nuove emoji aggiunte in questa sessione: **{copiate}**\n🔁 Totale duplicate nel server: **{gia_presenti}**\n⚠️ Errori: **{errori}**\n\n💡 *Se mancano ancora emoji, aspetta 30 secondi e rilancia il comando. Continuerà a scavalcare quelle vecchie e a fare blocchi da 15-20 emoji alla volta senza piantarsi.*")
 
 # ==========================================
 # COMANDO 2: ELIMINA TUTTE LE EMOJI
