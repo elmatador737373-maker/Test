@@ -114,59 +114,71 @@ async def crea_backup_zip(interaction: discord.Interaction):
     # Invia il file ZIP direttamente nella chat privata dell'utente
     await interaction.followup.send(file=file_discord, ephemeral=True)
 
-
 # ==========================================
-# COMANDO 2: CARICA DA FILE ZIP (PUBBLICO - VISIBILE A TUTTI)
+# COMANDO 2: CARICA FILE ZIP (CON SISTEMA DI LOG DETTAGLIATO)
 # ==========================================
-@client.tree.command(name="carica_zip", description="Carica uno ZIP e importa le immagini nel server. Messaggio visibile a tutti.")
+@client.tree.command(name="carica_zip", description="Carica un file .zip di emoji e fornisce un log dettagliato degli errori.")
 @app_commands.describe(file_zip="Trascina qui il file .zip con le emoji")
 async def carica_zip(interaction: discord.Interaction, file_zip: discord.Attachment):
-    # Rimosso ephemeral=True da qui così la risposta iniziale diventa pubblica
     await interaction.response.defer(ephemeral=False)
 
     if not interaction.user.guild_permissions.manage_expressions:
-        await interaction.followup.send("❌ Non hai il permesso 'Gestisci espressioni'.")
+        await interaction.followup.send("❌ Non hai il permesso 'Gestisci espressioni' per caricare emoji.")
         return
 
     if not file_zip.filename.endswith('.zip'):
-        await interaction.followup.send("❌ Deve essere un file `.zip`.")
+        await interaction.followup.send("❌ Il file deve essere un archivio in formato `.zip`.")
         return
 
-    status_message = await interaction.followup.send("📦 Estrazione del file ZIP in corso...")
+    status_message = await interaction.followup.send("⏳ Ricezione dell'archivio ZIP da Discord...")
+    temp_zip_path = f"temp_{interaction.guild.id}.zip"
+    
+    # Lista in cui salveremo i dettagli di ogni singolo errore per il file .txt finale
+    registro_errori = []
 
     try:
-        zip_bytes = await file_zip.read()
+        # Salva il file sul disco di Render
+        await file_zip.save(temp_zip_path)
+        
         copiate = 0
         errori = 0
         gia_presenti = 0
         target_guild = interaction.guild
 
-        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
-            tutti_i_file = archive.namelist()
+        with zipfile.ZipFile(temp_zip_path, 'r') as archive:
+            estensioni_valide = ('.png', '.jpg', '.jpeg', '.gif')
+            lista_file = [
+                f for f in archive.namelist() 
+                if f.lower().endswith(estensioni_valide) 
+                and not f.startswith('__MACOSX/') 
+                and not os.path.basename(f).startswith('.')
+            ]
             
-            lista_file = []
-            for f in tutti_i_file:
-                og_name = f.lower()
-                if og_name.endswith(('.png', '.jpg', '.jpeg', '.gif')) and not '__macosx' in og_name:
-                    lista_file.append(f)
-
             totale_file = len(lista_file)
+            
             if totale_file == 0:
-                await status_message.edit(content="⚠️ Nessuna immagine trovata dentro lo ZIP.")
+                await status_message.edit(content="⚠️ Non ho trovato immagini valide (.png, .jpg, .gif) nello ZIP.")
+                if os.path.exists(temp_zip_path): os.remove(temp_zip_path)
                 return
 
-            await status_message.edit(content=f"📚 Trovate **{totale_file}** emoji. Avvio caricamento forzato...")
+            await status_message.edit(content=f"📚 Trovate **{totale_file}** emoji. Inizio importazione con tracciamento log...")
 
             for file_path in lista_file:
                 nome_file = os.path.basename(file_path)
                 nome_emoji = os.path.splitext(nome_file)[0]
                 
+                # Semplificazione nome (Regole Discord)
                 nome_emoji = nome_emoji.replace("-", "_").replace(" ", "_")
                 nome_emoji = "".join([c if c.isalnum() or c == "_" else "" for c in nome_emoji])
                 
                 if not nome_emoji: 
+                    msg_err = f"[SALTO] Il file '{nome_file}' non ha caratteri validi per diventare un'emoji."
+                    registro_errori.append(msg_err)
+                    print(f"⚠️ {msg_err}")
+                    errori += 1
                     continue
 
+                # Controllo duplicati
                 existing = discord.utils.get(target_guild.emojis, name=nome_emoji)
                 if existing:
                     gia_presenti += 1
@@ -174,20 +186,70 @@ async def carica_zip(interaction: discord.Interaction, file_zip: discord.Attachm
 
                 try:
                     image_data = archive.read(file_path)
+                    
+                    # Controllo preventivo sul peso (Discord rifiuta sopra i 256KB)
+                    if len(image_data) > 256 * 1024:
+                        peso_kb = round(len(image_data) / 1024, 2)
+                        msg_err = f"[PESO] L'emoji '{nome_emoji}' è troppo pesante ({peso_kb} KB). Massimo consentito: 256 KB."
+                        registro_errori.append(msg_err)
+                        print(f"❌ {msg_err}")
+                        errori += 1
+                        continue
+
+                    # Tentativo di creazione
                     await target_guild.create_custom_emoji(name=nome_emoji, image=image_data)
                     copiate += 1
-                    await asyncio.sleep(0.5)
-                except Exception:
+                    await asyncio.sleep(0.6) # Anti-Rate Limit
+                    
+                except discord.HTTPException as e:
                     errori += 1
+                    msg_err = f"[DISCORD ERR {e.code}] Impossibile caricare '{nome_emoji}': {e.text}"
+                    registro_errori.append(msg_err)
+                    print(f"❌ {msg_err}")
+                    
+                    if e.code == 30008: # Slot pieni
+                        msg_critico = f"[CRITICO] Slot emoji esauriti sul server Discord dopo {copiate} caricamenti."
+                        registro_errori.append(msg_critico)
+                        break
+                        
+                except Exception as e:
+                    errori += 1
+                    msg_err = f"[ERRORE GENERICO] Errore imprevisto su '{nome_emoji}': {str(e)}"
+                    registro_errori.append(msg_err)
+                    print(f"❌ {msg_err}")
 
-                try:
-                    await status_message.edit(content=f"⏳ Elaborazione: **{copiate + gia_presenti + errori}/{totale_file}**\n✅ Caricate: **{copiate}** | 🔁 Saltate: **{gia_presenti}** | ⚠️ Fallite: **{errori}**")
-                except:
-                    pass
+                # Aggiorna lo stato ogni 10 elementi
+                if (copiate + gia_presenti + errori) % 10 == 0 or (copiate + gia_presenti + errori) == totale_file:
+                    try:
+                        await status_message.edit(content=f"⏳ Avanzamento: **{copiate + gia_presenti + errori}/{totale_file}**\n✅ Caricate: **{copiate}** | 🔁 Saltate: **{gia_presenti}** | ⚠️ Fallite: **{errori}**")
+                    except:
+                        pass
 
-        await status_message.edit(content=f"🏆 **Procedura completata!**\n✨ Caricate con successo: **{copiate}**\n🔁 Saltate: **{gia_presenti}**\n⚠️ Fallite: **{errori}**")
+        # === COMPILAZIONE FINALE DEL REPORT ===
+        testo_riepilogo = f"🏆 **Importazione conclusa!**\n✨ Nuove aggiunte: **{copiate}**\n🔁 Saltate (già presenti): **{gia_presenti}**\n⚠️ Fallite: **{errori}**"
+        
+        if errori > 0:
+            testo_riepilogo += f"\n\n🔍 Sono stati rilevati **{errori}** errori durante l'elaborazione. Trovi il report completo nel file allegato qui sotto 👇"
+            await status_message.edit(content=testo_riepilogo)
+            
+            # Genera il file .txt dei log direttamente in memoria
+            log_string = "\n".join(registro_errori)
+            log_file = discord.File(fp=io.StringIO(log_string), filename="log_errori_caricamento.txt")
+            
+            # Invia il file di log pubblico
+            await interaction.followup.send(content="📄 **Report Errori di Caricamento:**", file=log_file)
+        else:
+            testo_riepilogo += "\n\n🚀 Tutto è filato liscio come l'olio! Nessun errore riscontrato."
+            await status_message.edit(content=testo_riepilogo)
+
     except Exception as e:
-        await status_message.edit(content=f"❌ Errore imprevisto: {str(e)}")
+        msg_critico = f"❌ Errore irreversibile del sistema durante l'apertura dello ZIP: {str(e)}"
+        print(msg_critico)
+        await status_message.edit(content=msg_critico)
+    
+    finally:
+        if os.path.exists(temp_zip_path):
+            os.remove(temp_zip_path)
 
 # ==========================================
 # COMANDO 3: ELIMINA LE DUPLICATE (CORRETTO)
