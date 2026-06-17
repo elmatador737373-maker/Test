@@ -154,7 +154,49 @@ async def clona_emoji(interaction: discord.Interaction, source_guild_id: str):
     await status_message.edit(content=f"🏆 **Clonazione Completata!**\n"
                                       f"📊 Stato finale: **100%** ({totale_emoji}/{totale_emoji})\n\n"
                                       f"✨ Nuove emoji aggiunte: **{copiate}**\n"
-                                      f"🔁 Già presenti nel server: **{gia_presenti}**\n"
+                                      # ==========================================
+# COMANDO: ELIMINA TUTTE LE EMOJI
+# ==========================================
+@client.tree.command(name="elimina_tutte_emoji", description="⚠️ CANCELLA TUTTE LE EMOJI DA QUESTO SERVER. Richiede permessi di Amministratore.")
+async def elimina_tutte_emoji(interaction: discord.Interaction):
+    # Evita il timeout di 3 secondi del comando slash di Discord
+    await interaction.response.defer(ephemeral=True)
+
+    # Controllo di sicurezza: solo gli amministratori possono usarlo
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.followup.send("❌ Errore: Questo comando distruttivo può essere eseguito solo da un Amministratore.", ephemeral=True)
+        return
+
+    guild = interaction.guild
+    emojis_da_eliminare = guild.emojis
+
+    if not emojis_da_eliminare:
+        await interaction.followup.send("⚠️ Non ci sono emoji da eliminare in questo server.", ephemeral=True)
+        return
+
+    totale = len(emojis_da_eliminare)
+    await interaction.followup.send(f"🗑️ Trovate {totale} emoji. Inizio l'eliminazione di massa...", ephemeral=True)
+
+    eliminate = 0
+    errori = 0
+
+    for emoji in emojis_da_eliminare:
+        try:
+            await emoji.delete()
+            eliminate += 1
+            # Pausa di 0.4 secondi per evitare i blocchi anti-spam (Rate Limit) di Discord
+            await asyncio.sleep(0.4)
+        except Exception as e:
+            print(f"Impossibile eliminare l'emoji {emoji.name}: {e}")
+            errori += 1
+
+    await interaction.followup.send(
+        f"✅ Operazione di pulizia completata!\n"
+        f"🗑️ Emoji eliminate con successo: {eliminate}/{totale}\n"
+        f"⚠️ Errori (es. permessi del bot insufficienti): {errori}", 
+        ephemeral=True
+    )
+f"🔁 Già presenti nel server: **{gia_presenti}**\n"
                                       f"⚠️ Errori totali: **{errori}**\n\n"
                                       f"💡 *Se l'operazione si è interrotta a metà per via dei 3 minuti di Discord, ti basta rieseguire il comando per riprendere da dove si era fermato!*")
 
