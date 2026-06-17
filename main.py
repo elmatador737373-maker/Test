@@ -116,83 +116,78 @@ async def crea_backup_zip(interaction: discord.Interaction):
 
 
 # ==========================================
-# COMANDO 2: CARICA DA FILE ZIP (DIAGNOSTICO)
+# COMANDO 2: CARICA DA FILE ZIP (PUBBLICO - VISIBILE A TUTTI)
 # ==========================================
-@client.tree.command(name="carica_zip", description="Carica uno ZIP e importa le immagini nel server.")
+@client.tree.command(name="carica_zip", description="Carica uno ZIP e importa le immagini nel server. Messaggio visibile a tutti.")
 @app_commands.describe(file_zip="Trascina qui il file .zip con le emoji")
 async def carica_zip(interaction: discord.Interaction, file_zip: discord.Attachment):
-    await interaction.response.defer(ephemeral=True)
+    # Rimosso ephemeral=True da qui così la risposta iniziale diventa pubblica
+    await interaction.response.defer(ephemeral=False)
 
     if not interaction.user.guild_permissions.manage_expressions:
-        await interaction.followup.send("❌ Non hai il permesso 'Gestisci espressioni'.", ephemeral=True)
+        await interaction.followup.send("❌ Non hai il permesso 'Gestisci espressioni'.")
         return
 
     if not file_zip.filename.endswith('.zip'):
-        await interaction.followup.send("❌ Deve essere un file `.zip`.", ephemeral=True)
+        await interaction.followup.send("❌ Deve essere un file `.zip`.")
         return
 
-    status_message = await interaction.followup.send("📦 Lettura dello ZIP...", ephemeral=True)
+    status_message = await interaction.followup.send("📦 Estrazione del file ZIP in corso...")
 
     try:
         zip_bytes = await file_zip.read()
-        copiate, errori, gia_presenti = 0, 0, 0
-        ultimo_errore = "Nessuno"
+        copiate = 0
+        errori = 0
+        gia_presenti = 0
         target_guild = interaction.guild
 
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
-            estensioni_valide = ('.png', '.jpg', '.jpeg', '.gif')
-            lista_file = [f for f in archive.namelist() if f.lower().endswith(estensioni_valide) and not f.startswith('__MACOSX/') and not os.path.basename(f).startswith('.')]
-            totale_file = len(lista_file)
+            tutti_i_file = archive.namelist()
             
+            lista_file = []
+            for f in tutti_i_file:
+                og_name = f.lower()
+                if og_name.endswith(('.png', '.jpg', '.jpeg', '.gif')) and not '__macosx' in og_name:
+                    lista_file.append(f)
+
+            totale_file = len(lista_file)
             if totale_file == 0:
-                await status_message.edit(content="⚠️ Nessuna immagine valida trovata dentro lo ZIP.")
+                await status_message.edit(content="⚠️ Nessuna immagine trovata dentro lo ZIP.")
                 return
 
-            await status_message.edit(content=f"📚 Trovate **{totale_file}** emoji. Importazione avviata...")
+            await status_message.edit(content=f"📚 Trovate **{totale_file}** emoji. Avvio caricamento forzato...")
 
             for file_path in lista_file:
                 nome_file = os.path.basename(file_path)
                 nome_emoji = os.path.splitext(nome_file)[0]
+                
                 nome_emoji = nome_emoji.replace("-", "_").replace(" ", "_")
                 nome_emoji = "".join([c if c.isalnum() or c == "_" else "" for c in nome_emoji])
                 
-                if not nome_emoji: continue
+                if not nome_emoji: 
+                    continue
 
-                existing = discord.utils.get(target_guild.emojis, name=nome_emoji.lower()) or discord.utils.get(target_guild.emojis, name=nome_emoji)
+                existing = discord.utils.get(target_guild.emojis, name=nome_emoji)
                 if existing:
                     gia_presenti += 1
                     continue
 
                 try:
-                    with archive.open(file_path) as file_immagine:
-                        image_data = file_immagine.read()
-                        
-                        # Controllo dimensione file prima di mandarlo a Discord
-                        if len(image_data) > 256 * 1024:
-                            errori += 1
-                            ultimo_errore = f"File {nome_file} troppo pesante (>256KB)"
-                            continue
-
-                        await target_guild.create_custom_emoji(name=nome_emoji, image=image_data)
-                        copiate += 1
-                        await asyncio.sleep(0.5)
-                except discord.HTTPException as e:
+                    image_data = archive.read(file_path)
+                    await target_guild.create_custom_emoji(name=nome_emoji, image=image_data)
+                    copiate += 1
+                    await asyncio.sleep(0.5)
+                except Exception:
                     errori += 1
-                    ultimo_errore = f"Discord Errore {e.code}: {e.text}"
-                    if e.code == 30008:
-                        await status_message.edit(content=f"🚨 Slot esauriti dopo {copiate} emoji!")
-                        return
-                except Exception as e:
-                    errori += 1
-                    ultimo_errore = str(e)
 
                 try:
-                    await status_message.edit(content=f"⏳ Importazione... ({copiate + gia_presenti + errori}/{totale_file})\n✅ Nuove: **{copiate}** | 🔁 Saltate: **{gia_presenti}** | ⚠️ Fallite: **{errori}**")
-                except: pass
+                    await status_message.edit(content=f"⏳ Elaborazione: **{copiate + gia_presenti + errori}/{totale_file}**\n✅ Caricate: **{copiate}** | 🔁 Saltate: **{gia_presenti}** | ⚠️ Fallite: **{errori}**")
+                except:
+                    pass
 
-        await status_message.edit(content=f"🏆 **Completato!**\n✨ Nuove caricate: **{copiate}**\n🔁 Saltate (già presenti): **{gia_presenti}**\n⚠️ Fallite: **{errori}**\n\n🔍 **Dettaglio ultimo errore riscontrato:** `{ultimo_errore}`")
+        await status_message.edit(content=f"🏆 **Procedura completata!**\n✨ Caricate con successo: **{copiate}**\n🔁 Saltate: **{gia_presenti}**\n⚠️ Fallite: **{errori}**")
     except Exception as e:
-        await status_message.edit(content=f"❌ Errore critico ZIP: {str(e)}")
+        await status_message.edit(content=f"❌ Errore imprevisto: {str(e)}")
 
 # ==========================================
 # COMANDO 3: ELIMINA LE DUPLICATE (CORRETTO)
