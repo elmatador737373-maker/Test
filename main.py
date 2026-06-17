@@ -116,7 +116,7 @@ async def crea_backup_zip(interaction: discord.Interaction):
 
 
 # ==========================================
-# COMANDO 2: CARICA DA FILE ZIP
+# COMANDO 2: CARICA DA FILE ZIP (DIAGNOSTICO)
 # ==========================================
 @client.tree.command(name="carica_zip", description="Carica uno ZIP e importa le immagini nel server.")
 @app_commands.describe(file_zip="Trascina qui il file .zip con le emoji")
@@ -136,6 +136,7 @@ async def carica_zip(interaction: discord.Interaction, file_zip: discord.Attachm
     try:
         zip_bytes = await file_zip.read()
         copiate, errori, gia_presenti = 0, 0, 0
+        ultimo_errore = "Nessuno"
         target_guild = interaction.guild
 
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
@@ -144,7 +145,7 @@ async def carica_zip(interaction: discord.Interaction, file_zip: discord.Attachm
             totale_file = len(lista_file)
             
             if totale_file == 0:
-                await status_message.edit(content="⚠️ Nessuna immagine valida trovata.")
+                await status_message.edit(content="⚠️ Nessuna immagine valida trovata dentro lo ZIP.")
                 return
 
             await status_message.edit(content=f"📚 Trovate **{totale_file}** emoji. Importazione avviata...")
@@ -165,25 +166,33 @@ async def carica_zip(interaction: discord.Interaction, file_zip: discord.Attachm
                 try:
                     with archive.open(file_path) as file_immagine:
                         image_data = file_immagine.read()
+                        
+                        # Controllo dimensione file prima di mandarlo a Discord
+                        if len(image_data) > 256 * 1024:
+                            errori += 1
+                            ultimo_errore = f"File {nome_file} troppo pesante (>256KB)"
+                            continue
+
                         await target_guild.create_custom_emoji(name=nome_emoji, image=image_data)
                         copiate += 1
-                        await asyncio.sleep(0.4)
+                        await asyncio.sleep(0.5)
                 except discord.HTTPException as e:
+                    errori += 1
+                    ultimo_errore = f"Discord Errore {e.code}: {e.text}"
                     if e.code == 30008:
                         await status_message.edit(content=f"🚨 Slot esauriti dopo {copiate} emoji!")
                         return
+                except Exception as e:
                     errori += 1
-                except Exception:
-                    errori += 1
+                    ultimo_errore = str(e)
 
                 try:
                     await status_message.edit(content=f"⏳ Importazione... ({copiate + gia_presenti + errori}/{totale_file})\n✅ Nuove: **{copiate}** | 🔁 Saltate: **{gia_presenti}** | ⚠️ Fallite: **{errori}**")
                 except: pass
 
-        await status_message.edit(content=f"🏆 **Completato!**\n✨ Nuove: **{copiate}**\n🔁 Saltate: **{gia_presenti}**\n⚠️ Errori: **{errori}**")
+        await status_message.edit(content=f"🏆 **Completato!**\n✨ Nuove caricate: **{copiate}**\n🔁 Saltate (già presenti): **{gia_presenti}**\n⚠️ Fallite: **{errori}**\n\n🔍 **Dettaglio ultimo errore riscontrato:** `{ultimo_errore}`")
     except Exception as e:
-        await status_message.edit(content=f"❌ Errore ZIP: {str(e)}")
-
+        await status_message.edit(content=f"❌ Errore critico ZIP: {str(e)}")
 
 # ==========================================
 # COMANDO 3: ELIMINA LE DUPLICATE (CORRETTO)
