@@ -1,7 +1,7 @@
 discord.py
-yt-dlp
-PyNaCl
+Flask
 python-dotenv
-flask
 requests
 aiohttp
+PyNaCl
+audioop-lts
