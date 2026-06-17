@@ -47,6 +47,105 @@ class EmojiCloner(discord.Client):
 
 client = EmojiCloner()
 
+import zipfile
+import io
+
+# ==========================================
+# COMANDO 5: IMPORTA EMOJI DA FILE ZIP
+# ==========================================
+@client.tree.command(name="carica_zip", description="Carica un file .zip contenente le emoji e le importa direttamente nel server.")
+@app_commands.describe(file_zip="Trascina qui il file .zip con le emoji")
+async def carica_zip(interaction: discord.Interaction, file_zip: discord.Attachment):
+    await interaction.response.defer(ephemeral=True)
+
+    # Controllo permessi
+    if not interaction.user.guild_permissions.manage_expressions:
+        await interaction.followup.send("❌ Non hai il permesso 'Gestisci espressioni' in questo server.", ephemeral=True)
+        return
+
+    # Controlla che il file sia effettivamente uno ZIP
+    if not file_zip.filename.endswith('.zip'):
+        await interaction.followup.send("❌ Il file caricato deve essere in formato `.zip`.", ephemeral=True)
+        return
+
+    status_message = await interaction.followup.send("📦 Lettura del file ZIP in corso...", ephemeral=True)
+
+    try:
+        # Scarica il file zip caricato dall'utente in memoria
+        zip_bytes = await file_zip.read()
+        
+        copiate = 0
+        errori = 0
+        gia_presenti = 0
+        
+        target_guild = interaction.guild
+
+        # Apre lo ZIP direttamente in memoria senza salvarlo sul server di Render
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
+            # Filtra solo i file che sono immagini (png, jpg, jpeg, gif) e ignora file di sistema o cartelle
+            estensioni_valide = ('.png', '.jpg', '.jpeg', '.gif')
+            lista_file = [f for f in archive.namelist() if f.lower().endswith(estensioni_valide) and not f.startswith('__MACOSX/')]
+            
+            totale_file = len(lista_file)
+            
+            if totale_file == 0:
+                await status_message.edit(content="⚠️ Non ho trovato immagini valide (.png, .jpg, .gif) all'interno dello ZIP.")
+                return
+
+            await status_message.edit(content=f"📚 Trovate **{totale_file}** immagini nello ZIP. Inizio l'importazione...")
+
+            for file_path in lista_file:
+                # Estrae il nome del file senza estensione e senza il percorso delle cartelle
+                nome_file = os.path.basename(file_path)
+                nome_emoji = os.path.splitext(nome_file)[0]
+                
+                # Pulisce il nome per sicurezza (Discord accetta solo lettere, numeri e underscore)
+                nome_emoji = "".join([c if c.isalnum() or c == "_" else "" for c in nome_emoji])
+                
+                if not nome_emoji:
+                    continue
+
+                # Controllo duplicati (case-insensitive)
+                existing = discord.utils.get(target_guild.emojis, name=nome_emoji.lower()) or discord.utils.get(target_guild.emojis, name=nome_emoji)
+                if existing:
+                    gia_presenti += 1
+                    continue
+
+                try:
+                    # Legge i dati dell'immagine dallo zip
+                    with archive.open(file_path) as file_immagine:
+                        image_data = file_immagine.read()
+                        
+                        # Crea l'emoji sul server
+                        await target_guild.create_custom_emoji(name=nome_emoji, image=image_data)
+                        copiate += 1
+                        
+                        # Pausa minima di sicurezza anti-rate limit (molto più bassa rispetto a prima)
+                        await asyncio.sleep(0.5)
+                except discord.HTTPException as e:
+                    if e.code == 30008:
+                        await status_message.edit(content=f"🚨 Spasio esaurito sul server dopo aver caricato {copiate} emoji!")
+                        return
+                    errori += 1
+                except Exception:
+                    errori += 1
+
+                # Aggiornamento visivo veloce ogni 10 emoji
+                if (copiate + gia_presenti + errori) % 10 == 0:
+                    try:
+                        await status_message.edit(content=f"⏳ Importazione in corso... ({copiate + gia_presenti + errori}/{totale_file})\n"
+                                                          f"✅ Nuove: **{copiate}** | 🔁 Duplicate saltate: **{gia_presenti}** | ⚠️ Errori: **{errori}**")
+                    except: pass
+
+        # Report finale
+        await status_message.edit(content=f"🏆 **Importazione da ZIP completata!**\n\n"
+                                          f"✨ Nuove emoji aggiunte: **{copiate}**\n"
+                                          f"🔁 Già presenti (saltate): **{gia_presenti}**\n"
+                                          f"⚠️ Fallite/Errori: **{errori}**")
+
+    except Exception as e:
+        await status_message.edit(content=f"❌ Errore durante l'apertura dello ZIP: {str(e)}")
+
 # ==========================================
 # COMANDO 1: CLONA EMOTE (CON LOG EPHEMERAL)
 # ==========================================
