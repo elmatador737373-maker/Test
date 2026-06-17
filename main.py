@@ -186,10 +186,10 @@ async def carica_zip(interaction: discord.Interaction, file_zip: discord.Attachm
 
 
 # ==========================================
-# COMANDO 3: ELIMINA LE DUPLICATE
+# COMANDO 3: ELIMINA LE DUPLICATE (CORRETTO)
 # ==========================================
 @client.tree.command(name="elimina_duplicate", description="🧹 Rimuove i doppioni lasciandone solo una per tipo.")
-async def物理_duplicate(interaction: discord.Interaction):
+async def elimina_duplicate(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     if not interaction.user.guild_permissions.manage_expressions:
         await interaction.followup.send("❌ Permessi mancanti.", ephemeral=True)
@@ -217,7 +217,6 @@ async def物理_duplicate(interaction: discord.Interaction):
             nomi_visti.add(nome_standard)
 
     await interaction.followup.send(f"🧹 **Pulizia completata!**\n🗑️ Eliminate: **{duplicate_eliminate}**\n💎 Rimaste: **{len(nomi_visti)}**", ephemeral=True)
-
 
 # ==========================================
 # COMANDO 4: RESET GENERALE (ELIMINA TUTTO)
