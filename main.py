@@ -152,6 +152,60 @@ async def clona_emoji(interaction: discord.Interaction, source_guild_id: str):
     await status_message.edit(content=f"🏆 **Sessione Completata!**\n📊 Conto finale: ({analizzate}/{totale_emoji}) analizzate.\n\n✨ Nuove emoji aggiunte in questa sessione: **{copiate}**\n🔁 Totale duplicate nel server: **{gia_presenti}**\n⚠️ Errori: **{errori}**\n\n💡 *Se mancano ancora emoji, aspetta 30 secondi e rilancia il comando. Continuerà a scavalcare quelle vecchie e a fare blocchi da 15-20 emoji alla volta senza piantarsi.*")
 
 # ==========================================
+# COMANDO 4: ELIMINA SOLO LE EMOJI DUPLICATE
+# ==========================================
+@client.tree.command(name="elimina_duplicate", description="🧹 Rimuove i doppioni delle emoji nel server, lasciandone solo una per tipo.")
+async def elimina_duplicate(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+
+    # Controllo permessi
+    if not interaction.user.guild_permissions.manage_expressions:
+        await interaction.followup.send("❌ Non hai il permesso 'Gestisci espressioni' per usare questo comando.", ephemeral=True)
+        return
+
+    guild = interaction.guild
+    all_emojis = guild.emojis
+
+    if not all_emojis:
+        await interaction.followup.send("⚠️ Non ci sono emoji in questo server.", ephemeral=True)
+        return
+
+    await interaction.followup.send("🔍 Analisi delle emoji in corso... Sto cercando i doppioni...", ephemeral=True)
+
+    nomi_visti = set()
+    duplicate_eliminate = 0
+    errori = 0
+
+    for emoji in all_emojis:
+        # Portiamo il nome in minuscolo per un controllo preciso (es. "Gold" e "gold" vengono visti come doppioni)
+        nome_standard = emoji.name.lower()
+
+        if nome_standard in nomi_visti:
+            # Se il nome è già presente nel set, questa emoji è un doppione e va eliminata
+            try:
+                await emoji.delete()
+                duplicate_eliminate += 1
+                # Micro-pausa per evitare il rate-limit di Discord durante l'eliminazione
+                await asyncio.sleep(0.3)
+            except Exception:
+                errori += 1
+        else:
+            # Se è la prima volta che vediamo questo nome, lo salviamo e teniamo l'emoji
+            nomi_visti.add(nome_standard)
+
+    # Resoconto finale
+    if duplicate_eliminate == 0:
+        await interaction.followup.send("✨ Pulizia completata! Non è stato trovato nessun duplicato, il server è già in ordine.", ephemeral=True)
+    else:
+        await interaction.followup.send(
+            f"🧹 **Pulizia completata con successo!**\n"
+            f"🗑️ Emoji duplicate eliminate: **{duplicate_eliminate}**\n"
+            f"💎 Emoji uniche salvate e rimaste: **{len(nomi_visti)}**\n"
+            f"⚠️ Errori durante l'eliminazione: **{errori}**", 
+            ephemeral=True
+        )
+
+# ==========================================
 # COMANDO 2: ELIMINA TUTTE LE EMOJI
 # ==========================================
 @client.tree.command(name="elimina_tutte_emoji", description="⚠️ CANCELLA TUTTE LE EMOJI DA QUESTO SERVER. Richiede permessi di Amministratore.")
