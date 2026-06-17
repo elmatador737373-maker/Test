@@ -1,7 +1,8 @@
 import os
 import asyncio
 import threading
-import aiohttp
+import zipfile
+import io
 from flask import Flask
 import discord
 from discord import app_commands
@@ -11,7 +12,7 @@ load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 
 # ==========================================
-# SERVER WEB MINIMALE PER RENDER
+# SERVER WEB MINIMALE PER RENDER (KEEP ALIVE)
 # ==========================================
 app = Flask('')
 
@@ -36,34 +37,30 @@ intents.message_content = True
 intents.guilds = True
 intents.emojis = True
 
-class EmojiCloner(discord.Client):
+class EmojiBot(discord.Client):
     def __init__(self):
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
 
     async def on_ready(self):
+        # Forza la sincronizzazione globale dei comandi appena il bot si connette
         await self.tree.sync()
-        print(f'✅ Bot connesso come {self.user}')
+        print(f'✅ Bot connesso e comandi sincronizzati come {self.user}')
 
-client = EmojiCloner()
-
-import zipfile
-import io
+client = EmojiBot()
 
 # ==========================================
-# COMANDO 5: IMPORTA EMOJI DA FILE ZIP
+# COMANDO 1: CARICA DA FILE ZIP
 # ==========================================
 @client.tree.command(name="carica_zip", description="Carica un file .zip contenente le emoji e le importa direttamente nel server.")
 @app_commands.describe(file_zip="Trascina qui il file .zip con le emoji")
 async def carica_zip(interaction: discord.Interaction, file_zip: discord.Attachment):
     await interaction.response.defer(ephemeral=True)
 
-    # Controllo permessi
     if not interaction.user.guild_permissions.manage_expressions:
         await interaction.followup.send("❌ Non hai il permesso 'Gestisci espressioni' in questo server.", ephemeral=True)
         return
 
-    # Controlla che il file sia effettivamente uno ZIP
     if not file_zip.filename.endswith('.zip'):
         await interaction.followup.send("❌ Il file caricato deve essere in formato `.zip`.", ephemeral=True)
         return
@@ -71,21 +68,15 @@ async def carica_zip(interaction: discord.Interaction, file_zip: discord.Attachm
     status_message = await interaction.followup.send("📦 Lettura del file ZIP in corso...", ephemeral=True)
 
     try:
-        # Scarica il file zip caricato dall'utente in memoria
         zip_bytes = await file_zip.read()
-        
         copiate = 0
         errori = 0
         gia_presenti = 0
-        
         target_guild = interaction.guild
 
-        # Apre lo ZIP direttamente in memoria senza salvarlo sul server di Render
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
-            # Filtra solo i file che sono immagini (png, jpg, jpeg, gif) e ignora file di sistema o cartelle
             estensioni_valide = ('.png', '.jpg', '.jpeg', '.gif')
             lista_file = [f for f in archive.namelist() if f.lower().endswith(estensioni_valide) and not f.startswith('__MACOSX/')]
-            
             totale_file = len(lista_file)
             
             if totale_file == 0:
@@ -95,169 +86,51 @@ async def carica_zip(interaction: discord.Interaction, file_zip: discord.Attachm
             await status_message.edit(content=f"📚 Trovate **{totale_file}** immagini nello ZIP. Inizio l'importazione...")
 
             for file_path in lista_file:
-                # Estrae il nome del file senza estensione e senza il percorso delle cartelle
                 nome_file = os.path.basename(file_path)
                 nome_emoji = os.path.splitext(nome_file)[0]
-                
-                # Pulisce il nome per sicurezza (Discord accetta solo lettere, numeri e underscore)
                 nome_emoji = "".join([c if c.isalnum() or c == "_" else "" for c in nome_emoji])
                 
                 if not nome_emoji:
                     continue
 
-                # Controllo duplicati (case-insensitive)
+                # Controllo duplicati sicuro (sia minuscolo che normale)
                 existing = discord.utils.get(target_guild.emojis, name=nome_emoji.lower()) or discord.utils.get(target_guild.emojis, name=nome_emoji)
                 if existing:
                     gia_presenti += 1
                     continue
 
                 try:
-                    # Legge i dati dell'immagine dallo zip
                     with archive.open(file_path) as file_immagine:
                         image_data = file_immagine.read()
-                        
-                        # Crea l'emoji sul server
                         await target_guild.create_custom_emoji(name=nome_emoji, image=image_data)
                         copiate += 1
-                        
-                        # Pausa minima di sicurezza anti-rate limit (molto più bassa rispetto a prima)
-                        await asyncio.sleep(0.5)
+                        await asyncio.sleep(0.4) # Pausa minima anti-rate limit
                 except discord.HTTPException as e:
                     if e.code == 30008:
-                        await status_message.edit(content=f"🚨 Spasio esaurito sul server dopo aver caricato {copiate} emoji!")
+                        await status_message.edit(content=f"🚨 Spazio esaurito sul server dopo aver caricato {copiate} emoji!")
                         return
                     errori += 1
                 except Exception:
                     errori += 1
 
-                # Aggiornamento visivo veloce ogni 10 emoji
-                if (copiate + gia_presenti + errori) % 10 == 0:
+                if (copiate + gia_presenti + errori) % 5 == 0:
                     try:
                         await status_message.edit(content=f"⏳ Importazione in corso... ({copiate + gia_presenti + errori}/{totale_file})\n"
                                                           f"✅ Nuove: **{copiate}** | 🔁 Duplicate saltate: **{gia_presenti}** | ⚠️ Errori: **{errori}**")
                     except: pass
 
-        # Report finale
-        await status_message.edit(content=f"🏆 **Importazione da ZIP completata!**\n\n"
-                                          f"✨ Nuove emoji aggiunte: **{copiate}**\n"
-                                          f"🔁 Già presenti (saltate): **{gia_presenti}**\n"
-                                          f"⚠️ Fallite/Errori: **{errori}**")
+        await status_message.edit(content=f"🏆 **Importazione completata!**\n\n✨ Nuove aggiunte: **{copiate}**\n🔁 Saltate (già presenti): **{gia_presenti}**\n⚠️ Errori: **{errori}**")
 
     except Exception as e:
         await status_message.edit(content=f"❌ Errore durante l'apertura dello ZIP: {str(e)}")
 
 # ==========================================
-# COMANDO 1: CLONA EMOTE (CON LOG EPHEMERAL)
-# ==========================================
-# ==========================================
-# COMANDO CLONA: VERSIONE ANTI-BLOCCO 5 EMOJI
-# ==========================================
-@client.tree.command(name="clona_emoji", description="Copia le emoji rallentando il ritmo per evitare il blocco di Discord.")
-@app_commands.describe(source_guild_id="L'ID del server da cui vuoi copiare le emoji")
-async def clona_emoji(interaction: discord.Interaction, source_guild_id: str):
-    await interaction.response.defer(ephemeral=True)
-
-    if not interaction.user.guild_permissions.manage_expressions:
-        await interaction.followup.send("❌ Non hai il permesso 'Gestisci espressioni' in questo server.", ephemeral=True)
-        return
-
-    try:
-        source_guild = client.get_guild(int(source_guild_id))
-    except ValueError:
-        await interaction.followup.send("❌ ID server sorgente non valido.", ephemeral=True)
-        return
-
-    if not source_guild:
-        await interaction.followup.send("❌ Server sorgente non trovato.", ephemeral=True)
-        return
-
-    emojis_to_copy = source_guild.emojis
-    target_guild = interaction.guild
-    totale_emoji = len(emojis_to_copy)
-
-    if not emojis_to_copy:
-        await interaction.followup.send(f"⚠️ Il server `{source_guild.name}` non ha emoji.", ephemeral=True)
-        return
-
-    status_message = await interaction.followup.send(
-        f"🔄 **Clonazione avviata!**\n📦 Server sorgente: `{source_guild.name}`\n🔮 Totale: **{totale_emoji}**\n⏳ Controllo duplicati in corso...", 
-        ephemeral=True
-    )
-
-    copiate = 0
-    errori = 0
-    gia_presenti = 0
-    analizzate = 0
-    lista_log_recenti = []
-
-    timeout_config = aiohttp.ClientTimeout(total=10) # Timeout alzato a 10s per connessioni stabili
-
-    async with aiohttp.ClientSession(timeout=timeout_config) as session:
-        for emoji in emojis_to_copy:
-            analizzate += 1
-            
-            existing = discord.utils.get(target_guild.emojis, name=emoji.name)
-            if existing:
-                gia_presenti += 1
-                # Non aggiorniamo lo schermo per ogni duplicato, andiamo dritti al punto
-                continue
-
-            # Forza l'aggiornamento visivo appena trova un'emoji da copiare davvero
-            percentuale = int((analizzate / totale_emoji) * 100)
-            barra = "🟩" * int(percentuale / 10) + "⬛" * (10 - int(percentuale / 10))
-            testo_cronologia = "\n".join(lista_log_recenti) if lista_log_recenti else "Copia in corso..."
-            
-            try:
-                await status_message.edit(content=f"🔄 **Clonazione in corso (Ritmo sicuro)...**\n"
-                                                  f"📊 Avanzamento: {barra} **{percentuale}%** ({analizzate}/{totale_emoji})\n"
-                                                  f"⚡ Sto clonando: `{emoji.name}`\n\n"
-                                                  f"🔹 Nuove: **{copiate}** | 🔁 Duplicate saltate: **{gia_presenti}** | ⚠️ Errori: **{errori}**\n\n"
-                                                  f"📋 **Ultime azioni:**\n```text\n{testo_cronologia}\n```")
-            except: pass
-
-            try:
-                async with session.get(str(emoji.url)) as response:
-                    if response.status == 200:
-                        image_data = await response.read()
-                        await target_guild.create_custom_emoji(name=emoji.name, image=image_data)
-                        copiate += 1
-                        lista_log_recenti.append(f"✅ Copiata: `{emoji.name}`")
-                        
-                        # Alziamo la pausa a 3.5 secondi. È più lento, ma impedisce a Discord di murare il bot alla quinta emoji
-                        await asyncio.sleep(3.5)
-                    else:
-                        lista_log_recenti.append(f"❌ Errore scaricamento su `{emoji.name}`")
-                        errori += 1
-                        
-            except discord.RateLimited as e:
-                # Se becchiamo il blocco, aggiorniamo il log visivo dicendo quanti secondi aspettare
-                attesa = int(e.retry_after) + 2
-                lista_log_recenti.append(f"⚠️ Blocco anti-spam. Pausa forzata di {attesa}s...")
-                await asyncio.sleep(attesa)
-                
-            except discord.HTTPException as e:
-                if e.code == 30008: 
-                    lista_log_recenti.append("🚨 Spazio esaurito!")
-                    break
-                lista_log_recenti.append(f"❌ Errore Discord {e.code}")
-                errori += 1
-            except Exception:
-                lista_log_recenti.append(f"❌ Errore imprevisto su `{emoji.name}`")
-                errori += 1
-
-            if len(lista_log_recenti) > 5:
-                lista_log_recenti.pop(0)
-
-    await status_message.edit(content=f"🏆 **Sessione Completata!**\n📊 Conto finale: ({analizzate}/{totale_emoji}) analizzate.\n\n✨ Nuove emoji aggiunte in questa sessione: **{copiate}**\n🔁 Totale duplicate nel server: **{gia_presenti}**\n⚠️ Errori: **{errori}**\n\n💡 *Se mancano ancora emoji, aspetta 30 secondi e rilancia il comando. Continuerà a scavalcare quelle vecchie e a fare blocchi da 15-20 emoji alla volta senza piantarsi.*")
-
-# ==========================================
-# COMANDO 4: ELIMINA SOLO LE EMOJI DUPLICATE
+# COMANDO 2: ELIMINA SOLO LE DUPLICATE
 # ==========================================
 @client.tree.command(name="elimina_duplicate", description="🧹 Rimuove i doppioni delle emoji nel server, lasciandone solo una per tipo.")
 async def elimina_duplicate(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
 
-    # Controllo permessi
     if not interaction.user.guild_permissions.manage_expressions:
         await interaction.followup.send("❌ Non hai il permesso 'Gestisci espressioni' per usare questo comando.", ephemeral=True)
         return
@@ -269,61 +142,50 @@ async def elimina_duplicate(interaction: discord.Interaction):
         await interaction.followup.send("⚠️ Non ci sono emoji in questo server.", ephemeral=True)
         return
 
-    await interaction.followup.send("🔍 Analisi delle emoji in corso... Sto cercando i doppioni...", ephemeral=True)
+    await interaction.followup.send("🔍 Analisi delle emoji e rimozione duplicati avviata...", ephemeral=True)
 
     nomi_visti = set()
     duplicate_eliminate = 0
     errori = 0
 
     for emoji in all_emojis:
-        # Portiamo il nome in minuscolo per un controllo preciso (es. "Gold" e "gold" vengono visti come doppioni)
         nome_standard = emoji.name.lower()
 
         if nome_standard in nomi_visti:
-            # Se il nome è già presente nel set, questa emoji è un doppione e va eliminata
             try:
                 await emoji.delete()
                 duplicate_eliminate += 1
-                # Micro-pausa per evitare il rate-limit di Discord durante l'eliminazione
                 await asyncio.sleep(0.3)
             except Exception:
                 errori += 1
         else:
-            # Se è la prima volta che vediamo questo nome, lo salviamo e teniamo l'emoji
             nomi_visti.add(nome_standard)
 
-    # Resoconto finale
     if duplicate_eliminate == 0:
-        await interaction.followup.send("✨ Pulizia completata! Non è stato trovato nessun duplicato, il server è già in ordine.", ephemeral=True)
+        await interaction.followup.send("✨ Nessun duplicato trovato! Il server è già pulito.", ephemeral=True)
     else:
-        await interaction.followup.send(
-            f"🧹 **Pulizia completata con successo!**\n"
-            f"🗑️ Emoji duplicate eliminate: **{duplicate_eliminate}**\n"
-            f"💎 Emoji uniche salvate e rimaste: **{len(nomi_visti)}**\n"
-            f"⚠️ Errori durante l'eliminazione: **{errori}**", 
-            ephemeral=True
-        )
+        await interaction.followup.send(f"🧹 **Pulizia completata!**\n🗑️ Duplicate eliminate: **{duplicate_eliminate}**\n💎 Emoji uniche rimaste: **{len(nomi_visti)}**\n⚠️ Errori: **{errori}**", ephemeral=True)
 
 # ==========================================
-# COMANDO 2: ELIMINA TUTTE LE EMOJI
+# COMANDO 3: ELIMINA TUTTE LE EMOJI (RESET)
 # ==========================================
 @client.tree.command(name="elimina_tutte_emoji", description="⚠️ CANCELLA TUTTE LE EMOJI DA QUESTO SERVER. Richiede permessi di Amministratore.")
 async def elimina_tutte_emoji(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
 
     if not interaction.user.guild_permissions.administrator:
-        await interaction.followup.send("❌ Errore: Questo comando distruttivo può essere eseguito solo da un Amministratore.", ephemeral=True)
+        await interaction.followup.send("❌ Questo comando distruttivo può essere eseguito solo da un Amministratore.", ephemeral=True)
         return
 
     guild = interaction.guild
     emojis_da_eliminare = guild.emojis
 
     if not emojis_da_eliminare:
-        await interaction.followup.send("⚠️ Non ci sono emoji da eliminare in questo server.", ephemeral=True)
+        await interaction.followup.send("⚠️ Non ci sono emoji da eliminare.", ephemeral=True)
         return
 
     totale = len(emojis_da_eliminare)
-    await interaction.followup.send(f"🗑️ Trovate {totale} emoji. Inizio l'eliminazione di massa...", ephemeral=True)
+    await interaction.followup.send(f"🗑️ Rimozione di massa avviata per {totale} emoji...", ephemeral=True)
 
     eliminate = 0
     errori = 0
@@ -332,22 +194,17 @@ async def elimina_tutte_emoji(interaction: discord.Interaction):
         try:
             await emoji.delete()
             eliminate += 1
-            await asyncio.sleep(0.4)
+            await asyncio.sleep(0.3)
         except Exception:
             errori += 1
 
-    await interaction.followup.send(
-        f"✅ Operazione di pulizia completata!\n"
-        f"🗑️ Emoji eliminate con successo: {eliminate}/{totale}\n"
-        f"⚠️ Errori (es. permessi insufficienti): {errori}", 
-        ephemeral=True
-    )
+    await interaction.followup.send(f"✅ Svuotamento completato!\n🗑️ Emoji eliminate: **{eliminate}/{totale}**\n⚠️ Errori: **{errori}**", ephemeral=True)
 
 # ==========================================
-# AVVIO
+# AVVIO BOT
 # ==========================================
 if TOKEN:
     keep_alive()
     client.run(TOKEN)
 else:
-    print("❌ Manca il DISCORD_TOKEN.")
+    print("❌ Manca il DISCORD_TOKEN nelle variabili d'ambiente.")
