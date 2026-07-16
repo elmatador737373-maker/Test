@@ -201,13 +201,14 @@ async def annuncio(interaction: discord.Interaction, titolo: str, messaggio: str
 @bot.tree.command(name="esito_colloquio", description="Comunica l'esito del colloquio di un candidato.")
 @discord.app_commands.describe(
     utente="Il candidato che ha sostenuto il colloquio",
-    esito="Seleziona se il candidato è passato o meno"
+    esito="Seleziona se il candidato è passato o meno",
+    motivazione="Specifica le motivazioni dell'esito (opzionale)"
 )
 @discord.app_commands.choices(esito=[
     discord.app_commands.Choice(name="🟢 Approvato (Passato)", value="approvato"),
     discord.app_commands.Choice(name="🔴 Bocciato (Non Passato)", value="bocciato")
 ])
-async def esito_colloquio(interaction: discord.Interaction, utente: discord.Member, esito: discord.app_commands.Choice[str]):
+async def esito_colloquio(interaction: discord.Interaction, utente: discord.Member, esito: discord.app_commands.Choice[str], motivazione: str = None):
     # ID del ruolo richiesto per poter eseguire il comando (Staff/Esaminatori)
     RUOLO_STAFF_ID = 1524043601880023090
     
@@ -221,12 +222,109 @@ async def esito_colloquio(interaction: discord.Interaction, utente: discord.Memb
         )
         return
 
-    # Ritardiamo la risposta per evitare timeout durante l'aggiunta dei ruoli
-    await interaction.response.defer(ephemeral=False)
+    # Ritardiamo la risposta per evitare timeout durante l'aggiunta dei ruoli e l'invio nei canali
+    await interaction.response.defer(ephemeral=True)
     
-    # ID del ruolo da assegnare al candidato in caso di promozione (Recluta LSPD)
-    RUOLO_ID = 1524043584448364685
     guild = interaction.guild
+    
+    # ID del canale dove inviare l'embed del verbale/esito
+    CANALE_LOG_ID = 1524043697421811772
+    log_channel = guild.get_channel(CANALE_LOG_ID)
+    
+    if log_channel is None:
+        await interaction.followup.send(
+            f"⚠️ Errore: Non ho trovato il canale di output con ID `{CANALE_LOG_ID}`.",
+            ephemeral=True
+        )
+        return
+
+    # ID dei 3 ruoli da assegnare in caso di promozione (Approvato)
+    RUOLI_PROMOZIONE_IDS = [
+        1524043584448364685,
+        1524043603297439964,
+        1524043604467646597
+    ]
+    
+    testo_motivazione = motivazione if motivazione else "Nessuna motivazione aggiuntiva fornita."
+
+    if esito.value == "approvato":
+        ruoli_da_aggiungere = []
+        for r_id in RUOLI_PROMOZIONE_IDS:
+            ruolo_obj = guild.get_role(r_id)
+            if ruolo_obj:
+                ruoli_da_aggiungere.append(ruolo_obj)
+            else:
+                print(f"Attenzione: Non ho trovato il ruolo con ID {r_id} su Discord.")
+
+        if not ruoli_da_aggiungere:
+            await interaction.followup.send(
+                "⚠️ Errore: Nessuno dei ruoli di promozione configurati è stato trovato sul server.",
+                ephemeral=True
+            )
+            return
+
+        try:
+            # Assegna i molteplici ruoli all'utente promosso
+            await utente.add_roles(*ruoli_da_aggiungere)
+            
+            # Crea l'embed di successo per il canale dei log
+            embed = discord.Embed(
+                title="🚨 ESITO COLLOQUIO — APPROVATO",
+                description=(
+                    f"Congratulazioni {utente.mention}!\n\n"
+                    "Il tuo colloquio per l'**LSPD di Vinewood** è stato valutato con successo e sei stato arruolato.\n\n"
+                    f"**Esaminatore:** {interaction.user.mention}\n"
+                    f"**Motivazione/Note:**\n*{testo_motivazione}*\n\n"
+                    "Preparati per l'addestramento ufficiale!"
+                ),
+                color=discord.Color.green()
+            )
+            embed.set_thumbnail(url=utente.display_avatar.url)
+            embed.set_footer(text="Dipartimento di Polizia di Los Santos — Vinewood")
+            
+            # Invia l'esito ufficiale nel canale dei log designato
+            await log_channel.send(content=utente.mention, embed=embed)
+            
+            # Messaggio di conferma privato all'esaminatore che ha digitato il comando
+            await interaction.followup.send(
+                f"✅ Esito positivo registrato! Ruoli assegnati e notifica inviata in {log_channel.mention}.", 
+                ephemeral=True
+            )
+            
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "❌ Non ho i permessi necessari per assegnare questi ruoli. "
+                "Assicurati che il ruolo del mio Bot sia posizionato **più in alto** rispetto ai ruoli da assegnare nella lista dei ruoli del server.",
+                ephemeral=True
+            )
+        except Exception as e:
+            await interaction.followup.send(f"Si è verificato un errore: {str(e)}", ephemeral=True)
+
+    else:  # Caso: bocciato
+        # Crea l'embed di rifiuto per il canale dei log
+        embed = discord.Embed(
+            title="🚨 ESITO COLLOQUIO — NON APPROVATO",
+            description=(
+                f"Gentile {utente.mention},\n\n"
+                "Ci dispiace informarti che non hai superato l'ultimo colloquio per l'**LSPD di Vinewood**.\n\n"
+                f"**Esaminatore:** {interaction.user.mention}\n"
+                f"**Motivazione/Note:**\n*{testo_motivazione}*\n\n"
+                "Potrai ripresentare la tua candidatura non appena riapriranno i bandi. "
+                "Sfrutta questo tempo per studiare al meglio le procedure!"
+            ),
+            color=discord.Color.red()
+        )
+        embed.set_thumbnail(url=utente.display_avatar.url)
+        embed.set_footer(text="Dipartimento di Polizia di Los Santos — Vinewood")
+        
+        # Invia la notifica ufficiale nel canale log
+        await log_channel.send(content=utente.mention, embed=embed)
+        
+        # Conferma privata all'esaminatore
+        await interaction.followup.send(
+            f"❌ Esito negativo registrato! Notifica inviata in {log_channel.mention}.", 
+            ephemeral=True
+        )
 
 # ==========================================
 # 4. AVVIO IN PARALLELO
