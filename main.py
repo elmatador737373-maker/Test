@@ -172,6 +172,31 @@ async def setup_pannello(interaction: discord.Interaction):
     await interaction.response.send_message("Pannello completo generato con successo!", ephemeral=True)
     await interaction.channel.send(embed=embed, view=LSPDAdmissionView())
 
+# COMANDO: Invio di un annuncio personalizzato
+@bot.tree.command(name="annuncio", description="Invia un annuncio formattato in questo canale.")
+@commands.has_permissions(administrator=True)
+@discord.app_commands.describe(
+    titolo="Il titolo principale dell'annuncio",
+    messaggio="Il testo/contenuto dell'annuncio (usa \\n per andare a capo)"
+)
+async def annuncio(interaction: discord.Interaction, titolo: str, messaggio: str):
+    # Sostituisce eventuali \n digitati dall'utente in veri e propri a capo nel messaggio
+    messaggio_formattato = messaggio.replace("\\n", "\n")
+
+    # Creiamo l'embed dell'annuncio con lo stile coordinato dell'LSPD
+    embed = discord.Embed(
+        title=f"📢 {titolo.upper()}",
+        description=messaggio_formattato,
+        color=discord.Color.from_rgb(0, 47, 167)  # Blu Polizia
+    )
+    embed.set_footer(text=f"Dipartimento di Polizia di Los Santos | Vinewood")
+    
+    # Risposta di conferma effimera (invisibile agli altri utenti)
+    await interaction.response.send_message("Annuncio inviato con successo!", ephemeral=True)
+    
+    # Invia l'annuncio nel canale in cui è stato eseguito il comando
+    await interaction.channel.send(embed=embed)
+
 # ==========================================
 # 4. AVVIO IN PARALLELO
 # ==========================================
