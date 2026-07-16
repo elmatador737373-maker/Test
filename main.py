@@ -112,6 +112,124 @@ bot = LSPDBot()
 async def on_ready():
     print(f'Bot LSPD connesso con successo come: {bot.user.name}')
 
+# COMANDO: Gestione Carriera (Promozioni e Degradazioni)
+@bot.tree.command(name="gestisciagenti", description="Registra una promozione o una degradazione per un membro del dipartimento.")
+@discord.app_commands.describe(
+    utente="Il membro del dipartimento interessato",
+    tipo="Seleziona se si tratta di una Promozione o di una Degradazione",
+    grado_precedente="Il grado che l'utente possedeva prima di questo provvedimento",
+    nuovo_grado="Il nuovo grado assegnato all'utente",
+    motivazione="La motivazione formale del provvedimento"
+)
+@discord.app_commands.choices(tipo=[
+    discord.app_commands.Choice(name="📈 Promozione", value="promozione"),
+    discord.app_commands.Choice(name="📉 Degradazione", value="degradazione")
+])
+async def carriera(
+    interaction: discord.Interaction, 
+    utente: discord.Member, 
+    tipo: discord.app_commands.Choice[str], 
+    grado_precedente: str, 
+    nuovo_grado: str, 
+    motivazione: str
+):
+    # ID del ruolo richiesto per poter eseguire il comando (Staff/Alto Comando)
+    RUOLO_STAFF_ID = 1524043601880023090
+    
+    # Verifica se chi esegue il comando ha il ruolo richiesto
+    has_permission = any(role.id == RUOLO_STAFF_ID for role in interaction.user.roles)
+    
+    if not has_permission:
+        await interaction.response.send_message(
+            "❌ Non hai i permessi necessari (ruolo richiesto non posseduto) per utilizzare questo comando.", 
+            ephemeral=True
+        )
+        return
+
+    # Ritardiamo la risposta per evitare timeout di Discord
+    await interaction.response.defer(ephemeral=True)
+    
+    guild = interaction.guild
+    
+    # ID del canale dei log/esiti dove inviare il verbale
+    CANALE_LOG_ID = 1524043697421811772
+    log_channel = guild.get_channel(CANALE_LOG_ID)
+    
+    if log_channel is None:
+        await interaction.followup.send(
+            f"⚠️ Errore: Non ho trovato il canale di log con ID `{CANALE_LOG_ID}`.",
+            ephemeral=True
+        )
+        return
+
+    # Personalizziamo l'aspetto dell'embed in base alla scelta (Promozione o Degradazione)
+    if tipo.value == "promozione":
+        titolo_provvedimento = "📈 ORDINE DI SERVIZIO — PROMOZIONE"
+        colore_embed = discord.Color.green()
+        descrizione_testo = (
+            f"Si comunica ufficialmente che l'operatore {utente.mention} è stato **promosso** di grado.\n\n"
+            f"La Direzione esprime i suoi complimenti per l'impegno dimostrato sul campo."
+        )
+    else:  # Caso: degradazione
+        titolo_provvedimento = "📉 ORDINE DI SERVIZIO — DEGRADAZIONE"
+        colore_embed = discord.Color.red()
+        descrizione_testo = (
+            f"Si comunica ufficialmente che nei confronti dell'operatore {utente.mention} è stato applicato un provvedimento di **degradazione**.\n\n"
+            f"Il dipendente è invitato ad attenersi rigorosamente ai regolamenti vigenti."
+        )
+
+    # Creazione dell'embed del verbale di carriera
+    embed = discord.Embed(
+        title=titolo_provvedimento,
+        description=descrizione_testo,
+        color=colore_embed
+    )
+    
+    embed.add_field(
+        name="👮‍♂️ Dipendente Interessato",
+        value=f"{utente.mention} (`{utente.id}`)",
+        inline=True
+    )
+    embed.add_field(
+        name="✍️ Autorizzato Da",
+        value=f"{interaction.user.mention}",
+        inline=True
+    )
+    
+    # Campo per mostrare il cambio di grado effettivo
+    embed.add_field(
+        name="📊 Variazione di Ruolo",
+        value=f"Da: **{grado_precedente}**\nA: **{nuovo_grado}**",
+        inline=False
+    )
+    
+    # Campo motivazione
+    embed.add_field(
+        name="📝 Motivazione Ufficiale",
+        value=f"*{motivazione}*",
+        inline=False
+    )
+    
+    embed.set_thumbnail(url=utente.display_avatar.url)
+    embed.set_footer(text="Dipartimento di Polizia di Los Santos — Vinewood")
+    
+    try:
+        # Invia il verbale formattato nel canale dei log designato
+        await log_channel.send(content=utente.mention, embed=embed)
+        
+        # Conferma privata a chi ha digitato il comando
+        tipo_testo = "Promozione" if tipo.value == "promozione" else "Degradazione"
+        await interaction.followup.send(
+            f"✅ {tipo_testo} registrata con successo! Il verbale è stato inviato in {log_channel.mention}.", 
+            ephemeral=True
+        )
+        
+    except Exception as e:
+        await interaction.followup.send(
+            f"❌ Si è verificato un errore durante l'invio dell'embed: {str(e)}", 
+            ephemeral=True
+        )
+
 # ==========================================
 # GESTIONE BENVENUTO AUTOMATICO (LSPD)
 # ==========================================
