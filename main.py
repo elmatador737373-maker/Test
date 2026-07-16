@@ -197,6 +197,37 @@ async def annuncio(interaction: discord.Interaction, titolo: str, messaggio: str
     # Invia l'annuncio nel canale in cui è stato eseguito il comando
     await interaction.channel.send(embed=embed)
 
+# COMANDO: Esito del Colloquio (Assegnazione Ruolo)
+@bot.tree.command(name="esito_colloquio", description="Comunica l'esito del colloquio di un candidato.")
+@discord.app_commands.describe(
+    utente="Il candidato che ha sostenuto il colloquio",
+    esito="Seleziona se il candidato è passato o meno"
+)
+@discord.app_commands.choices(esito=[
+    discord.app_commands.Choice(name="🟢 Approvato (Passato)", value="approvato"),
+    discord.app_commands.Choice(name="🔴 Bocciato (Non Passato)", value="bocciato")
+])
+async def esito_colloquio(interaction: discord.Interaction, utente: discord.Member, esito: discord.app_commands.Choice[str]):
+    # ID del ruolo richiesto per poter eseguire il comando (Staff/Esaminatori)
+    RUOLO_STAFF_ID = 1524043601880023090
+    
+    # Verifica se chi esegue il comando ha il ruolo richiesto
+    has_permission = any(role.id == RUOLO_STAFF_ID for role in interaction.user.roles)
+    
+    if not has_permission:
+        await interaction.response.send_message(
+            "❌ Non hai i permessi necessari (ruolo richiesto non posseduto) per utilizzare questo comando.", 
+            ephemeral=True
+        )
+        return
+
+    # Ritardiamo la risposta per evitare timeout durante l'aggiunta dei ruoli
+    await interaction.response.defer(ephemeral=False)
+    
+    # ID del ruolo da assegnare al candidato in caso di promozione (Recluta LSPD)
+    RUOLO_ID = 1524043584448364685
+    guild = interaction.guild
+
 # ==========================================
 # 4. AVVIO IN PARALLELO
 # ==========================================
