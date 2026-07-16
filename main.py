@@ -113,6 +113,66 @@ async def on_ready():
     print(f'Bot LSPD connesso con successo come: {bot.user.name}')
 
 # ==========================================
+# GESTIONE BENVENUTO AUTOMATICO (LSPD)
+# ==========================================
+@bot.event
+async def on_member_join(member: discord.Member):
+    # ID del canale di benvenuto fornito
+    CANALE_BENVENUTO_ID = 1524043683110981724
+    guild = member.guild
+    
+    # Recupera il canale di benvenuto
+    welcome_channel = guild.get_channel(CANALE_BENVENUTO_ID)
+    
+    if welcome_channel is None:
+        print(f"Attenzione: Non ho trovato il canale di benvenuto con ID {CANALE_BENVENUTO_ID}")
+        return
+
+    # Creazione di un Embed di benvenuto di alto impatto visivo
+    embed = discord.Embed(
+        title="🚔 BEN_VENUTO NEL SERVIZIO — LSPD VINEWOOD 🚔",
+        description=(
+            f"Salute, {member.mention}!\n\n"
+            "Sei appena entrato nel server ufficiale del **Dipartimento di Polizia di Los Santos — Divisione di Vinewood**.\n"
+            "Qui potrai intraprendere la tua carriera per garantire l'ordine, la sicurezza e la giustizia nella nostra città.\n\n"
+            "---"
+        ),
+        color=discord.Color.from_rgb(0, 47, 167)  # Blu Polizia
+    )
+    
+    # Sezione dei primi passi per l'utente
+    embed.add_field(
+        name="📌 DA DOVE INIZIARE?",
+        value=(
+            "• **Leggi il Regolamento:** Assicurati di conoscere le regole interne per evitare sanzioni.\n"
+            "• **Arruolati nel corpo:** Se desideri unirti alle nostre forze, leggi i requisiti e apri una richiesta colloquio usando i nostri canali dedicati!\n"
+            "• **Rispetta la Gerarchia:** Il rispetto reciproco e la disciplina sono alla base del nostro dipartimento."
+        ),
+        inline=False
+    )
+    
+    # Statistiche rapide sull'utente e sul server
+    embed.add_field(
+        name="📊 INFO AGGUNTIVE",
+        value=(
+            f"• **Account creato il:** <t:{int(member.created_at.timestamp())}:D>\n"
+            f"• **Sei il membro numero:** `{len(guild.members)}`"
+        ),
+        inline=False
+    )
+    
+    # Foto profilo dell'utente come miniatura nell'angolo dell'embed
+    embed.set_thumbnail(url=member.display_avatar.url)
+    
+    # Banner inferiore coordinato (puoi anche sostituire questa URL con una GIF del dipartimento se ne hai una)
+    embed.set_image(url="https://i.imgur.com/8N46HOf.gif") # Sostituisci o rimuovi se non desideri immagini di sfondo
+    
+    embed.set_footer(text="Ufficio Accoglienza e Pubbliche Relazioni LSPD | Vinewood")
+
+    # Invia l'embed menzionando l'utente per attirare la sua attenzione
+    await welcome_channel.send(content=f"Benvenuto {member.mention}! 👮‍♂️", embed=embed)
+
+# ==========================================
 # 3. COMANDO SLASH PER GENERARE IL PANNELLO COMPLETO
 # ==========================================
 @bot.tree.command(name="setup_pannello", description="Invia il pannello completo per i colloqui LSPD Vinewood.")
