@@ -164,9 +164,7 @@ async def on_member_join(member: discord.Member):
     # Foto profilo dell'utente come miniatura nell'angolo dell'embed
     embed.set_thumbnail(url=member.display_avatar.url)
     
-    # Banner inferiore coordinato (puoi anche sostituire questa URL con una GIF del dipartimento se ne hai una)
-    embed.set_image(url="https://i.imgur.com/8N46HOf.gif") # Sostituisci o rimuovi se non desideri immagini di sfondo
-    
+
     embed.set_footer(text="Ufficio Accoglienza e Pubbliche Relazioni LSPD | Vinewood")
 
     # Invia l'embed menzionando l'utente per attirare la sua attenzione
