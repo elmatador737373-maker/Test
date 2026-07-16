@@ -56,10 +56,49 @@ class LSPDAdmissionView(View):
         
         # Creiamo il canale SENZA definire "overwrites". 
         # Passando la categoria, erediterà in automatico tutti i suoi permessi (Sincronizzazione automatica).
+        # 1. Recuperiamo il ruolo responsabile/staff tramite il suo ID
+        RUOLO_STAFF_ID = 1524043601880023090
+        ruolo_responsabile = guild.get_role(RUOLO_STAFF_ID)
+
+        # 2. Definiamo i permessi specifici (overwrites) per il canale
+        overwrites = {
+            # Nasconde il canale a tutti gli altri membri del server (@everyone)
+            guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            
+            # Permette all'utente che ha aperto il ticket di vedere e scrivere
+            member: discord.PermissionOverwrite(
+                read_messages=True, 
+                send_messages=True, 
+                attach_files=True, 
+                embed_links=True,
+                read_message_history=True
+            ),
+            
+            # Permette al bot stesso di gestire il canale
+            guild.me: discord.PermissionOverwrite(
+                read_messages=True, 
+                send_messages=True, 
+                manage_channels=True
+            )
+        }
+
+        # Se il ruolo responsabile esiste sul server, gli diamo i permessi di lettura e scrittura
+        if ruolo_responsabile:
+            overwrites[ruolo_responsabile] = discord.PermissionOverwrite(
+                read_messages=True, 
+                send_messages=True, 
+                attach_files=True, 
+                embed_links=True,
+                read_message_history=True
+            )
+
+        # 3. Creiamo il canale applicando la categoria e i permessi personalizzati appena definiti
         ticket_channel = await guild.create_text_channel(
             name=channel_name, 
-            category=category
+            category=category,
+            overwrites=overwrites
         )
+
 
         # Embed di benvenuto all'interno del ticket
         welcome_embed = discord.Embed(
